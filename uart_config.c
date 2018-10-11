@@ -36,7 +36,15 @@ void uart_send_data(void *pvParameters){
         uart_putc(1, 0B00000001);
         uart_putc(1, 0B10101010);
         uart_flush_txfifo(1);
-        vTaskDelay(2000/portTICK_PERIOD_MS);
+        vTaskDelay(4000/portTICK_PERIOD_MS);
+    }
+}
+
+void uart_print_input(void *pvParameters) {
+    char ch;
+    for(;;) {
+        ch=(char)uart_getc(0);
+        uart_putc(1,ch);
     }
 }
 
@@ -92,6 +100,12 @@ void user_init(void){
     uart_set_baud(0, 9600);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
     
-    xTaskCreate(uart_send_data, "tsk1", 256, NULL, 2, NULL);
-    xTaskCreate(uart_print_config, "tsk2", 256, NULL, 3, NULL);
+//    xTaskCreate(uart_send_data, "tsk1", 256, NULL, 2, NULL);
+    /* Activate UART for GPIO2 */
+    gpio_set_iomux_function(2, IOMUX_GPIO2_FUNC_UART1_TXD);
+    
+    /* Set baud rate of UART1 to 100 (so it's easier to measure) */
+    uart_set_baud(1, 9600);
+
+    xTaskCreate(uart_print_input, "tsk2", 256, NULL, 1, NULL);
 }
