@@ -18,16 +18,16 @@ void uart_send_data(void *pvParameters){
     gpio_set_iomux_function(2, IOMUX_GPIO2_FUNC_UART1_TXD);
     
     /* Set baud rate of UART1 to 100 (so it's easier to measure) */
-    uart_set_baud(1, 100);
+    uart_set_baud(1, 9600);
     
     /* Set to 1.5 stopbits */
-    uart_set_stopbits(1, UART_STOPBITS_1_5);
+    uart_set_stopbits(1, UART_STOPBITS_1);
     
     /* Enable parity bit */
-    uart_set_parity_enabled(1, true);
+    uart_set_parity_enabled(1, false);
     
     /* Set parity bit to even */
-    uart_set_parity(1, UART_PARITY_EVEN);
+    //uart_set_parity(1, UART_PARITY_EVEN);
     
     /* Repeatedly send some example packets */
     for(;;)
@@ -36,6 +36,7 @@ void uart_send_data(void *pvParameters){
         uart_putc(1, 0B00000001);
         uart_putc(1, 0B10101010);
         uart_flush_txfifo(1);
+        vTaskDelay(2000/portTICK_PERIOD_MS);
     }
 }
 
@@ -88,7 +89,7 @@ void uart_print_config(void *pvParameters){
 }
 
 void user_init(void){
-    uart_set_baud(0, 115200);
+    uart_set_baud(0, 9600);
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
     
     xTaskCreate(uart_send_data, "tsk1", 256, NULL, 2, NULL);
