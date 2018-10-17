@@ -40,85 +40,76 @@ void uart_send_data(void *pvParameters){
     }
 }
 
-int buff[17]; //longest message + 1
+int buff[16]={0x55,0xfe,0xfe,0x03,0x01,0xb9,0x24,0,0,0,0,0,0,0,0,0}; //longest message
 int idx=0;
+
+void shift_buff(int positions) {
+    int i;
+    for (i=positions;i<16;i++) {
+        buff[i-positions]=buff[i];
+    }
+    for (i=16-positions;i<16;i++) buff[i]=0;
+    idx-=positions;
+}
+
+void parse(int positions) {
+    int i=0;
+    if (positions<4) printf("%02x%02x\n",buff[0],buff[1]);
+    else {
+        for (i=3;i<positions-2;i++) printf("%02x",buff[i]);
+        printf("\n");
+    }
+}
+
+//uint CRC16_2(QByteArray buf, int len) {}
+uint  crc16(int len) {   
+  uint crc = 0xFFFF;
+
+  for (int pos = 0; pos < len; pos++)
+  {
+    crc ^= (uint)buff[pos];          // XOR byte into least sig. byte of crc
+
+    for (int i = 8; i != 0; i--) {    // Loop over each bit
+      if ((crc & 0x0001) != 0) {      // If the LSB is set
+        crc >>= 1;                    // Shift right and XOR 0xA001
+        crc ^= 0xA001;
+      }
+      else                            // Else LSB is not set
+        crc >>= 1;                    // Just shift right
+    }
+  }
+  // Note, this number has low and high bytes swapped, so use it accordingly (or swap bytes)
+  return crc;
+}
+
 void uart_parse_input(void *pvParameters) {
-    char ch;
     for(;;) {
         buff[idx++]=uart_getc(0);
         while (idx){
-            if (!(buff[0]==0x8c || buff[0]==0x55)) {          shift_buff(1); continue;}
-            if   (buff[0]==0x8c && buff[1]==0xfc)  {parse(2); shift_buff(2); continue;}
-            if   (buff[0]==0x8c && idx>=2)         {          shift_buff(1); continue;}
+            if (!(buff[0]==0x8c || buff[0]==0x55))  {          shift_buff(1); continue;}
+            if   (buff[0]==0x8c && buff[1]==0xfc)   {parse(2); shift_buff(2); continue;}
+            if   (buff[0]==0x8c && idx>=2)          {          shift_buff(1); continue;}
             if (  buff[0]==0x55 && !(buff[1]==0xfe && buff[2]==0xfe) && idx>2 ) {
-                                                              shift_buff(1); continue;} //now for sure 0x55fefe
-            if (  buff[3]==0 || buff[3]>4 && idx>3){          shift_buff(1); continue;}
-            if (  buff[4]==0 || buff[4]>9 && idx>4){          shift_buff(1); continue;}
+                                                               shift_buff(1); continue;} //now for sure 0x55fefe
+            if ( (buff[3]==0 || buff[3]>4) && idx>3){          shift_buff(1); continue;}
+            if ( (buff[4]==0 || buff[4]>9) && idx>4){          shift_buff(1); continue;}
             if (  buff[3]==3 && idx>=7 )  {
-                if (crc(7))  {parse(7); shift_buff(7); continue;}
-                if (crc(8))  {parse(8); shift_buff(8); continue;}
-                if (idx>=8)  {          shift_buff(7); continue;} // failure for type 3 so flush it
+                if (!crc16(7)) {parse(7); shift_buff(7); continue;}
+                if (!crc16(8)) {parse(8); shift_buff(8); continue;}
+                if (idx>=8)    {          shift_buff(7); continue;} // failure for type 3 so flush it
             }
             if (  (buff[3]==1||buff[3]==2) && idx>=8 ) {
-                if (crc(8))  {parse(8); shift_buff(8); continue;}
-                if (crc(9))  {parse(9); shift_buff(9); continue;}
-                if (idx>=9)  {          shift_buff(8); continue;} // failure for type 1 or 2 so flush it
+                if (!crc16(8)) {parse(8); shift_buff(8); continue;}
+                if (!crc16(9)) {parse(9); shift_buff(9); continue;}
+                if (idx>=9)    {          shift_buff(8); continue;} // failure for type 1 or 2 so flush it
             }
             if ( buff[3]==4 && idx==16)  {
-                if (crc(16))  parse(16);
+                if (!crc16(16)) parse(16);
                 shift_buff(16); continue;
             }
             if (idx==16) printf("something went wrong: idx=16!\n");
             break;
         }
-    }
-}
-
-void uart_print_config(void *pvParameters){
-    for(;;)
-    {
-        /* Get data */
-        int baud = uart_get_baud(1);
-        UART_StopBits stopbits = uart_get_stopbits(1);
-        bool parity_enabled = uart_get_parity_enabled(1);
-        UART_Parity parity = uart_get_parity(1);
-        
-        /* Print to UART0 */
-        printf("Baud: %d ", baud);
-        
-        switch(stopbits){
-        case UART_STOPBITS_0:
-            printf("Stopbits: 0 ");
-        break;
-        case UART_STOPBITS_1:
-            printf("Stopbits: 1 ");
-        break;
-        case UART_STOPBITS_1_5:
-            printf("Stopbits: 1.5 ");
-        break;
-        case UART_STOPBITS_2:
-            printf("Stopbits: 2");
-        break;
-        default:
-            printf("Stopbits: Error");
-        }
-        
-        printf("Parity bit enabled: %d ", parity_enabled);
-        
-        switch(parity){
-        case UART_PARITY_EVEN:
-            printf("Parity: Even");
-        break;
-        case UART_PARITY_ODD:
-            printf("Parity: Odd");
-        break;
-        default:
-            printf("Parity: Error");
-        }
-        
-        printf("\n");
-        
-        vTaskDelay(1000.0 / portTICK_PERIOD_MS);
     }
 }
 
@@ -131,6 +122,6 @@ void user_init(void){
     printf("SDK version:%s\n", sdk_system_get_sdk_version());
     
 //    xTaskCreate(uart_send_data, "tsk1", 256, NULL, 2, NULL);
-
-    xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
+printf("%04x\n",crc16(5));
+    //xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
 }
