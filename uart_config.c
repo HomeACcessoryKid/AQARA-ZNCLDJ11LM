@@ -39,13 +39,20 @@ void log_send(void *pvParameters){
     }
 }
 
-void uart_send_data(void *pvParameters){
-        uart_putc(1, 0B10101010);
-        uart_flush_txfifo(1);
-        vTaskDelay(4000/portTICK_PERIOD_MS);
+void uart_send_output(void *pvParameters){
+    int i;
+    char  open[]={0x55,0xfe,0xfe,0x03,0x01,0xb9,0x24};
+    char close[]={0x55,0xfe,0xfe,0x03,0x02,0xf9,0x25};
+    char pause[]={0x55,0xfe,0xfe,0x03,0x03,0x38,0xe5};
+    vTaskDelay(1000); //wait 10 seconds
+    while(1) {
+        LOG(" open\n");for (i=0;i<7;i++) uart_putc(1, open[i]);uart_flush_txfifo(1);vTaskDelay(300);
+        LOG("close\n");for (i=0;i<7;i++) uart_putc(1,close[i]);uart_flush_txfifo(1);vTaskDelay(300);
+        LOG("pause\n");for (i=0;i<7;i++) uart_putc(1,pause[i]);uart_flush_txfifo(1);vTaskDelay(300);
+    }
 }
 
-int buff[16]={0x55,0xfe,0xfe,0x03,0x01,0xb9,0x24,0,0,0,0,0,0,0,0,0}; //longest message
+int buff[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //longest message
 int idx=0;
 
 void shift_buff(int positions) {
@@ -90,7 +97,7 @@ uint  crc16(int len) {
 void uart_parse_input(void *pvParameters) {
     //LOG("%04x\n",crc16(5));
 
-    int i;
+    //int i;
     for(;;) {
         buff[idx++]=uart_getc(0);
         //for (i=1;i<idx;i++) LOG("   ");
@@ -143,4 +150,5 @@ void user_init(void){
     LOG("SDK version:%s\n", sdk_system_get_sdk_version());
 
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
+    xTaskCreate(uart_send_output, "send",  256, NULL, 1, NULL);
 }
