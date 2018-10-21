@@ -10,11 +10,19 @@
 #include <string.h>
 #include "lwip/api.h"
 
+//use nc -kulnw0 8005 to collect this output
 #define LOG(message, ...)  sprintf(string+strlen(string),message, ##__VA_ARGS__)
 char string[1450]={0}; //in the end I do not know to prevent overflow, so I use the max size of 1 UDP packet
-struct netconn* conn;
 void log_send(void *pvParameters){
+    struct netconn* conn;
     int i=0,len;
+    
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(100);
+    // Create UDP connection
+    conn = netconn_new(NETCONN_UDP);
+    if (netconn_bind(   conn, IP_ADDR_ANY,       8004) != ERR_OK) netconn_delete(conn);
+    if (netconn_connect(conn, IP_ADDR_BROADCAST, 8005) != ERR_OK) netconn_delete(conn);
+    
     while(1){
         len=strlen(string);
         if ((!i && len) || len>1000) {
@@ -80,15 +88,6 @@ uint  crc16(int len) {
 }
 
 void uart_parse_input(void *pvParameters) {
-    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(100);
-    
-    // Create UDP connection
-    conn = netconn_new(NETCONN_UDP);
-    // Connect to local port
-    if (netconn_bind(conn, IP_ADDR_ANY, 8004) != ERR_OK) netconn_delete(conn);
-    if (netconn_connect(conn, IP_ADDR_BROADCAST, 8005) != ERR_OK) netconn_delete(conn);
-    
-    LOG("SDK version:%s\n", sdk_system_get_sdk_version());
     LOG("%04x\n",crc16(5));
 
     int i;
@@ -141,5 +140,7 @@ void user_init(void){
     sdk_wifi_station_set_config(&config);/**/
     
     xTaskCreate(log_send, "logsend", 256, NULL, 4, NULL); //is prio4 a good idea??
+    LOG("SDK version:%s\n", sdk_system_get_sdk_version());
+
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
 }
