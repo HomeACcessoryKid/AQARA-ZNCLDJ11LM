@@ -88,19 +88,19 @@ uint  crc16(int len) {
 }
 
 void uart_parse_input(void *pvParameters) {
-    LOG("%04x\n",crc16(5));
+    //LOG("%04x\n",crc16(5));
 
     int i;
     for(;;) {
         buff[idx++]=uart_getc(0);
-        for (i=1;i<idx;i++) LOG("   ");
-        LOG("v%d\n",idx);
+        //for (i=1;i<idx;i++) LOG("   ");
+        //LOG("v%d\n",idx);
         while (idx){
-            for (i=0;i<16;i++) LOG("%02x.",buff[i]);
-            LOG("   %d\n",idx);
-            if (!(buff[0]==0x8c || buff[0]==0x55))  {          shift_buff(1); continue;}
-            if   (buff[0]==0x8c && buff[1]==0xfc)   {parse(2); shift_buff(2); continue;}
-            if   (buff[0]==0x8c && idx>=2)          {          shift_buff(1); continue;}
+            //for (i=0;i<16;i++) LOG("%02x.",buff[i]);
+            //LOG("   %d\n",idx);
+            if (!(buff[0]==0x88 || buff[0]==0x55))  {          shift_buff(1); continue;}
+            if   (buff[0]==0x88 && buff[1]==0xf8)   {parse(2); shift_buff(2); continue;}
+            if   (buff[0]==0x88 && idx>=2)          {          shift_buff(1); continue;}
             if (  buff[0]==0x55 && !(buff[1]==0xfe && buff[2]==0xfe) && idx>2 ) {
                                                                shift_buff(1); continue;} //now for sure 0x55fefe
             if ( (buff[3]==0 || buff[3]>4) && idx>3){          shift_buff(1); continue;}
