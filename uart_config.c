@@ -9,16 +9,17 @@
 //#include <espressif/esp_wifi.h>
 #include <string.h>
 #include "lwip/api.h"
-char logstring[1450];
-#define LOG(message, ...) do {sprintf(logstring,message, ##__VA_ARGS__);syslog(logstring);} while(0)
 struct netconn* conn;
-void syslog(char *string) {
-    //printf(string);
-    struct netbuf* buf = netbuf_new();
-    void* data = netbuf_alloc(buf, strlen(string));
-    memcpy (data, string, strlen(string));
-    if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf); // De-allocate packet buffer
-}
+char string[1450]={0};
+#define LOG(message, ...)   do {sprintf(string+strlen(string),message, ##__VA_ARGS__); \
+                                if (strlen(string)>1000 || strchr(string,'\n')){ \
+                                    struct netbuf* buf = netbuf_new(); \
+                                    void* data = netbuf_alloc(buf, strlen(string)); \
+                                    memcpy (data, string, strlen(string)); \
+                                    if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf); \
+                                    string[0]=0; \
+                                } \
+                            } while(0)
 
 void uart_send_data(void *pvParameters){
         uart_putc(1, 0B10101010);
@@ -77,7 +78,7 @@ void uart_parse_input(void *pvParameters) {
     if (netconn_bind(conn, IP_ADDR_ANY, 8004) != ERR_OK) netconn_delete(conn);
     if (netconn_connect(conn, IP_ADDR_BROADCAST, 8005) != ERR_OK) netconn_delete(conn);
     
-    LOG("a much longer message SDK version:%s\n", sdk_system_get_sdk_version());
+    LOG("SDK version:%s\n", sdk_system_get_sdk_version());
     LOG("%04x\n",crc16(5));
 
     int i;
