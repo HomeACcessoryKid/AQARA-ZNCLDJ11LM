@@ -9,17 +9,27 @@
 //#include <espressif/esp_wifi.h>
 #include <string.h>
 #include "lwip/api.h"
+
+#define LOG(message, ...)  sprintf(string+strlen(string),message, ##__VA_ARGS__)
+char string[1450]={0}; //in the end I do not know to prevent overflow, so I use the max size of 1 UDP packet
 struct netconn* conn;
-char string[1450]={0};
-#define LOG(message, ...)   do {sprintf(string+strlen(string),message, ##__VA_ARGS__); \
-                                if (strlen(string)>1000 || strchr(string,'\n')){ \
-                                    struct netbuf* buf = netbuf_new(); \
-                                    void* data = netbuf_alloc(buf, strlen(string)); \
-                                    memcpy (data, string, strlen(string)); \
-                                    if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf); \
-                                    string[0]=0; \
-                                } \
-                            } while(0)
+void log_send(void *pvParameters){
+    int i=0,len;
+    while(1){
+        len=strlen(string);
+        if ((!i && len) || len>1000) {
+            struct netbuf* buf = netbuf_new();
+            void* data = netbuf_alloc(buf,len);
+            memcpy (data,string,len);
+            string[0]=0; //there is a risk of new LOG to add to string after we measured len
+            if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf);
+            i=10;
+        }
+        if (!i) i=10;
+        i--;
+        vTaskDelay(1); //with len>1000 and delay=10ms, we can handle 800kbps input
+    }
+}
 
 void uart_send_data(void *pvParameters){
         uart_putc(1, 0B10101010);
@@ -130,5 +140,6 @@ void user_init(void){
     sdk_wifi_set_opmode(STATION_MODE);
     sdk_wifi_station_set_config(&config);/**/
     
+    xTaskCreate(log_send, "logsend", 256, NULL, 4, NULL); //is prio4 a good idea??
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
 }
