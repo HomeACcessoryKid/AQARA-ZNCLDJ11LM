@@ -10,7 +10,7 @@
 #include <string.h>
 #include "lwip/api.h"
 char logstring[1450];
-#define LOG(message, ...) sprintf(logstring,message, ##__VA_ARGS__);syslog(logstring)
+#define LOG(message, ...) do {sprintf(logstring,message, ##__VA_ARGS__);syslog(logstring);} while(0)
 struct netconn* conn;
 void syslog(char *string) {
     //printf(string);
@@ -40,10 +40,10 @@ void shift_buff(int positions) {
 
 void parse(int positions) {
     int i=0;
-    if (positions<4) printf("%02x%02x\n",buff[0],buff[1]);
+    if (positions<4) LOG("%02x%02x\n",buff[0],buff[1]);
     else {
-        for (i=3;i<positions-2;i++) printf("%02x",buff[i]);
-        printf("\n");
+        for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
+        LOG("\n");
     }
 }
 
@@ -83,11 +83,11 @@ void uart_parse_input(void *pvParameters) {
     int i;
     for(;;) {
         buff[idx++]=uart_getc(0);
-        for (i=1;i<idx;i++) printf("   ");
-        printf("v%d\n",idx);
+        for (i=1;i<idx;i++) LOG("   ");
+        LOG("v%d\n",idx);
         while (idx){
-            for (i=0;i<16;i++) printf("%02x.",buff[i]);
-            printf("   %d\n",idx);
+            for (i=0;i<16;i++) LOG("%02x.",buff[i]);
+            LOG("   %d\n",idx);
             if (!(buff[0]==0x8c || buff[0]==0x55))  {          shift_buff(1); continue;}
             if   (buff[0]==0x8c && buff[1]==0xfc)   {parse(2); shift_buff(2); continue;}
             if   (buff[0]==0x8c && idx>=2)          {          shift_buff(1); continue;}
@@ -109,7 +109,7 @@ void uart_parse_input(void *pvParameters) {
                 if (!crc16(16)) parse(16);
                 shift_buff(16); continue;
             }
-            if (idx==16) printf("something went wrong: idx=16!\n");
+            if (idx==16) LOG("something went wrong: idx=16!\n");
             break;
         }
     }
