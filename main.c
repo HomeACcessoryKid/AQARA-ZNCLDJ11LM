@@ -47,7 +47,7 @@ void log_send(void *pvParameters){
     }
 }
 
-bool  hold=0,calibrate=0,reverse=0;
+bool  hold=0,calibrate=0,reverse=0,obstruction=0;
 bool  changed=0;
 int  target=0,current=0,state=2; //homekit values
 
@@ -234,9 +234,12 @@ void motor_init() {
     //xTaskCreate(motor_loop_task, "loop", 512, NULL, 1, NULL);
 }
 
+homekit_value_t obstruction_get() {
+    return HOMEKIT_BOOL(obstruction);
+}
 
 homekit_value_t hold_get() {
-    return HOMEKIT_BOOL(on);
+    return HOMEKIT_BOOL(hold);
 }
 void hold_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
@@ -292,11 +295,7 @@ void state_set(homekit_value_t value) {
 }
 
 void identify_task(void *_args) {
-    int oldmode;
-    oldmode=mode;
-    mode=10; changed=1;
     vTaskDelay(5000 / portTICK_PERIOD_MS); //5 sec
-    mode=oldmode; changed=1;
     vTaskDelete(NULL);
 }
 
@@ -344,6 +343,10 @@ homekit_accessory_t *accessories[] = {
                         .getter=hold_get,
                         .setter=hold_set
                     ),
+                    HOMEKIT_CHARACTERISTIC(
+                        OBSTRUCTION_DETECTED, false,
+                        .getter=obstruction_get,
+                    ),
                     &ota_trigger,
                     &calibrated,
                     &reversed,
@@ -355,6 +358,7 @@ homekit_accessory_t *accessories[] = {
 };
 
 
+
 homekit_server_config_t config = {
     .accessories = accessories,
     .password = "111-11-111"
@@ -362,7 +366,7 @@ homekit_server_config_t config = {
 
 void user_init(void) {
     xTaskCreate(log_send, "logsend", 256, NULL, 4, NULL); //is prio4 a good idea??
-    LOG("Aqara Curtain Motor SDK version:%s\n", sdk_system_get_sdk_version());
+    LOG("Aqara Curtain Motor\n");
 
     motor_init();
 
