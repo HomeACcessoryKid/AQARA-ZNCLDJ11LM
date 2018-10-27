@@ -49,7 +49,32 @@ void log_send(void *pvParameters){
 
 bool  hold=0,calibrate=0,reverse=0,obstruction=0;
 bool  changed=0;
-int  target=0,current=0,state=2; //homekit values
+int  target=0,current=0; //homekit values
+
+#define SEND(message,n,i) do {LOG(#message "\n"); \
+                            uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe); \
+                            for (i=0;i<n;i++) uart_putc(1,_ ## message[i]); \
+                            uart_flush_txfifo(1);\
+                        } while(0)
+
+char    _open[]={0x03,0x01,0xb9,0x24}; //n=4
+char   _close[]={0x03,0x02,0xf9,0x25}; //n=4
+char   _pause[]={0x03,0x03,0x38,0xe5}; //n=4
+char   _uncal[]={0x03,0x07,0x39,0x26}; //n=4
+char  _reqpos[]={0x01,0x02,0x01,0x85,0x42}; //n=5
+char  _reqdir[]={0x01,0x03,0x01,0x84,0xd2}; //n=5
+char  _reqda4[]={0x01,0x04,0x01,0x86,0xe2}; //n=5
+char  _reqsta[]={0x01,0x05,0x01,0x87,0x72}; //n=5
+//6
+//7
+//8
+char  _reqda9[]={0x01,0x09,0x01,0x82,0x72}; //n=5
+char _setdir0[]={0x02,0x03,0x01,0x00,0xd2,0x27}; //n=6
+char _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
+
+char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
+char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
+char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
 
 // add this section to make your device OTA capable
 // create the extra characteristic &ota_trigger, at the end of the primary service (before the NULL)
@@ -68,6 +93,9 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 //                                      &model.value.string_value,&revision.value.string_value);
 //    config.accessories[0]->config_number=c_hash;
 // end of OTA add-in instructions
+
+homekit_characteristic_t state = HOMEKIT_CHARACTERISTIC_(POSITION_STATE, 2);
+
 
 
 homekit_value_t calibrate_get() {
@@ -142,27 +170,18 @@ struct _report {
 
 QueueHandle_t reportQueue = NULL;
 void report_track(void *pvParameters){
+    int i;
     struct _report rep;
     if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) 100 ) ) {
             //do things
+            if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //stopped
+            if (rep.status==1){state.value.int_value=0;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going min
+            if (rep.status==2){state.value.int_value=1;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going max
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
         }
-        //send a position request
-    }
-}
-
-void uart_send_output(void *pvParameters){
-    int i;
-    char  open[]={0x55,0xfe,0xfe,0x03,0x01,0xb9,0x24};
-    char close[]={0x55,0xfe,0xfe,0x03,0x02,0xf9,0x25};
-    char pause[]={0x55,0xfe,0xfe,0x03,0x03,0x38,0xe5};
-    vTaskDelay(1000); //wait 10 seconds
-    while(1) {
-        LOG(" open\n");for (i=0;i<7;i++) uart_putc(1, open[i]);uart_flush_txfifo(1);vTaskDelay(1000);
-        LOG("close\n");for (i=0;i<7;i++) uart_putc(1,close[i]);uart_flush_txfifo(1);vTaskDelay(1000);
-        LOG("pause\n");for (i=0;i<7;i++) uart_putc(1,pause[i]);uart_flush_txfifo(1);vTaskDelay(1000);
+        SEND(reqpos,5,i);
     }
 }
 
@@ -310,20 +329,6 @@ void current_set(homekit_value_t value) {
     changed=1;
 }
 
-homekit_value_t state_get() {
-    return HOMEKIT_UINT8(state);
-}
-void state_set(homekit_value_t value) {
-    if (value.format != homekit_format_uint8) {
-        printf("Invalid state-value format: %d\n", value.format);
-        return;
-    }
-    //printf("S:%3d @ %d\n",value.int_value,sdk_system_get_time());
-    printf("S:%3d\n",value.int_value);
-    state = value.int_value;
-    changed=1;
-}
-
 void identify_task(void *_args) {
     vTaskDelay(5000 / portTICK_PERIOD_MS); //5 sec
     vTaskDelete(NULL);
@@ -363,11 +368,7 @@ homekit_accessory_t *accessories[] = {
                         .getter=target_get,
                         .setter=target_set
                     ),
-                    HOMEKIT_CHARACTERISTIC(
-                        POSITION_STATE, 2,
-                        .getter=state_get,
-                        .setter=state_set
-                    ),
+                    &state,
                     HOMEKIT_CHARACTERISTIC(
                         HOLD_POSITION, 0,
                         .getter=hold_get,
