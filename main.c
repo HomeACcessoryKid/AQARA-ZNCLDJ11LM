@@ -49,7 +49,7 @@ void log_send(void *pvParameters){
 
 bool  hold=0,calibrate=0,reverse=0,obstruction=0;
 bool  changed=0;
-int  target=0,current=0; //homekit values
+int  target=0; //homekit values
 
 #define SEND(message,n,i) do {LOG(#message "\n"); \
                             uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe); \
@@ -94,7 +94,8 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 //    config.accessories[0]->config_number=c_hash;
 // end of OTA add-in instructions
 
-homekit_characteristic_t state = HOMEKIT_CHARACTERISTIC_(POSITION_STATE, 2);
+homekit_characteristic_t state        = HOMEKIT_CHARACTERISTIC_(POSITION_STATE,   2);
+homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
 
 
 
@@ -170,16 +171,17 @@ struct _report {
 
 QueueHandle_t reportQueue = NULL;
 void report_track(void *pvParameters){
-    int i;
+    int i,timer=1500;
     struct _report rep;
     if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
-        if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) 100 ) ) {
-            //do things
-            if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //stopped
+        if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
+            timer=100;
             if (rep.status==1){state.value.int_value=0;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going min
             if (rep.status==2){state.value.int_value=1;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going max
+            if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));timer=1500;} //stopped
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
+            LOG("state: %d\n",state.value.int_value);
         }
         SEND(reqpos,5,i);
     }
@@ -199,6 +201,7 @@ void shift_buff(int positions) {
 
 void parse(int positions) {
     int i=0;
+    static int j=0;  //remove, debug only
     if (positions<4) LOG("%02x%02x\n",buff[0],buff[1]);
     else {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
@@ -209,6 +212,17 @@ void parse(int positions) {
             report.status=buff[9];
             report.calibr=buff[13];
             xQueueSend( reportQueue, (void *) &report, ( TickType_t ) 0 );
+        }
+        if (buff[3]==0x01 && buff[4]==0x02 && buff[5]==0x01) {
+            if (buff[6]==0xff){
+                current.value.int_value=j++;
+                homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
+                LOG("current: %d\n",current.value.int_value);
+            }
+            else {
+                current.value.int_value=buff[6];
+                homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
+            }
         }
     }
 }
@@ -315,20 +329,6 @@ void target_set(homekit_value_t value) {
     changed=1;
 }
 
-homekit_value_t current_get() {
-    return HOMEKIT_UINT8(current);
-}
-void current_set(homekit_value_t value) {
-    if (value.format != homekit_format_uint8) {
-        printf("Invalid current-value format: %d\n", value.format);
-        return;
-    }
-    //printf("C:%3d @ %d\n",value.int_value,sdk_system_get_time());
-    printf("C:%3d\n",value.int_value);
-    current = value.int_value;
-    changed=1;
-}
-
 void identify_task(void *_args) {
     vTaskDelay(5000 / portTICK_PERIOD_MS); //5 sec
     vTaskDelete(NULL);
@@ -358,11 +358,7 @@ homekit_accessory_t *accessories[] = {
             HOMEKIT_SERVICE(WINDOW_COVERING, .primary=true,
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Curtain"),
-                    HOMEKIT_CHARACTERISTIC(
-                        CURRENT_POSITION, 0,
-                        .getter=current_get,
-                        .setter=current_set
-                    ),
+                    &current,
                     HOMEKIT_CHARACTERISTIC(
                         TARGET_POSITION, 0,
                         .getter=target_get,
