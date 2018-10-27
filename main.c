@@ -47,7 +47,7 @@ void log_send(void *pvParameters){
     }
 }
 
-bool  hold=0,calibrate=0,reverse=0,obstruction=0;
+bool  hold=0,calibrate=0,reverse=0;
 bool  changed=0;
 int  target=0; //homekit values
 
@@ -96,8 +96,7 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 
 homekit_characteristic_t state        = HOMEKIT_CHARACTERISTIC_(POSITION_STATE,   2);
 homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
-
-
+homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETECTED, 0);
 
 homekit_value_t calibrate_get() {
     return HOMEKIT_BOOL(calibrate);
@@ -180,6 +179,9 @@ void report_track(void *pvParameters){
             if (rep.status==1){state.value.int_value=0;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going min
             if (rep.status==2){state.value.int_value=1;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going max
             if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));timer=1500;} //stopped
+//             if (rep.status==4){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
+//                 obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_UINT8(obstruction.value.int_value));
+//                 timer=1500;} //obstructed
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state: %d\n",state.value.int_value);
         }
@@ -217,6 +219,7 @@ void parse(int positions) {
             if (buff[6]==0xff){
                 current.value.int_value=j++;
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
+                if (j==3) obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_UINT8(obstruction.value.int_value));
                 LOG("current: %d\n",current.value.int_value);
             }
             else {
@@ -297,10 +300,6 @@ void motor_init() {
     //xTaskCreate(uart_send_output, "send",  256, NULL, 1, NULL);
 }
 
-homekit_value_t obstruction_get() {
-    return HOMEKIT_BOOL(obstruction);
-}
-
 homekit_value_t hold_get() {
     return HOMEKIT_BOOL(hold);
 }
@@ -370,10 +369,7 @@ homekit_accessory_t *accessories[] = {
                         .getter=hold_get,
                         .setter=hold_set
                     ),
-                    HOMEKIT_CHARACTERISTIC(
-                        OBSTRUCTION_DETECTED, false,
-                        .getter=obstruction_get,
-                    ),
+                    &obstruction,
                     &ota_trigger,
                     &calibrated,
                     &reversed,
