@@ -129,7 +129,29 @@ void reverse_set(homekit_value_t value) {
 
 homekit_characteristic_t reversed = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSED, 0, .setter=reverse_set, .getter=reverse_get);
 
+struct _report {
+    int position;
+    int direction;
+    //int data4;
+    int status;
+    //int data6;
+    //int data7;
+    //int data8;
+    int calibr;
+} report;
 
+QueueHandle_t reportQueue = NULL;
+void report_track(void *pvParameters){
+    struct _report rep;
+    if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
+    while(1) {
+        if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) 100 ) ) {
+            //do things
+            LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
+        }
+        //send a position request
+    }
+}
 
 void uart_send_output(void *pvParameters){
     int i;
@@ -138,9 +160,9 @@ void uart_send_output(void *pvParameters){
     char pause[]={0x55,0xfe,0xfe,0x03,0x03,0x38,0xe5};
     vTaskDelay(1000); //wait 10 seconds
     while(1) {
-        LOG(" open\n");for (i=0;i<7;i++) uart_putc(1, open[i]);uart_flush_txfifo(1);vTaskDelay(500);
-        LOG("close\n");for (i=0;i<7;i++) uart_putc(1,close[i]);uart_flush_txfifo(1);vTaskDelay(500);
-        LOG("pause\n");for (i=0;i<7;i++) uart_putc(1,pause[i]);uart_flush_txfifo(1);vTaskDelay(500);
+        LOG(" open\n");for (i=0;i<7;i++) uart_putc(1, open[i]);uart_flush_txfifo(1);vTaskDelay(1000);
+        LOG("close\n");for (i=0;i<7;i++) uart_putc(1,close[i]);uart_flush_txfifo(1);vTaskDelay(1000);
+        LOG("pause\n");for (i=0;i<7;i++) uart_putc(1,pause[i]);uart_flush_txfifo(1);vTaskDelay(1000);
     }
 }
 
@@ -162,6 +184,13 @@ void parse(int positions) {
     else {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
         LOG("\n");
+        if (buff[3]==0x04 && buff[4]==0x02 && buff[5]==0x08) {
+            report.position=buff[6];
+            report.direction=buff[7];
+            report.status=buff[9];
+            report.calibr=buff[13];
+            xQueueSend( reportQueue, (void *) &report, ( TickType_t ) 0 );
+        }
     }
 }
 
@@ -230,8 +259,9 @@ void motor_init() {
     uart_set_baud(0, 9600);
 
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
-    xTaskCreate(uart_send_output, "send",  256, NULL, 1, NULL);
-    //xTaskCreate(motor_loop_task, "loop", 512, NULL, 1, NULL);
+    reportQueue = xQueueCreate(3, sizeof(struct _report));
+    xTaskCreate(report_track, "track", 512, NULL, 2, NULL);
+    //xTaskCreate(uart_send_output, "send",  256, NULL, 1, NULL);
 }
 
 homekit_value_t obstruction_get() {
