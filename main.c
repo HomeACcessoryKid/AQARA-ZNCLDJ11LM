@@ -180,7 +180,7 @@ void report_track(void *pvParameters){
             if (rep.status==2){state.value.int_value=1;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going max
             if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));timer=1500;} //stopped
 //             if (rep.status==4){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
-//                 obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_UINT8(obstruction.value.int_value));
+//                 obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));
 //                 timer=1500;} //obstructed
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state: %d\n",state.value.int_value);
@@ -219,7 +219,8 @@ void parse(int positions) {
             if (buff[6]==0xff){
                 current.value.int_value=j++;
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
-                if (j==3) obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_UINT8(obstruction.value.int_value));
+                if (j==7) {obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));}
+                if (j==9) {obstruction.value.bool_value=0;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));}
                 LOG("current: %d\n",current.value.int_value);
             }
             else {
