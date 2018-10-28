@@ -18,18 +18,18 @@
 #include <string.h>
 #include "lwip/api.h"
 
-//use nc -kulnw0 8005 to collect this output
+//use nc -kulnw0 34567 to collect this output
 #define LOG(message, ...)  sprintf(string+strlen(string),message, ##__VA_ARGS__)
 char string[1450]={0}; //in the end I do not know to prevent overflow, so I use the max size of 1 UDP packet
 void log_send(void *pvParameters){
     struct netconn* conn;
     int i=0,len;
     
-    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(100);
+    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms 
     // Create UDP connection
     conn = netconn_new(NETCONN_UDP);
-    if (netconn_bind(   conn, IP_ADDR_ANY,       8004) != ERR_OK) netconn_delete(conn);
-    if (netconn_connect(conn, IP_ADDR_BROADCAST, 8005) != ERR_OK) netconn_delete(conn);
+    if (netconn_bind(   conn, IP_ADDR_ANY,       33333) != ERR_OK) netconn_delete(conn);
+    if (netconn_connect(conn, IP_ADDR_BROADCAST, 34567) != ERR_OK) netconn_delete(conn);
     
     while(1){
         len=strlen(string);
@@ -41,22 +41,18 @@ void log_send(void *pvParameters){
             if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf);
             i=10;
         }
-        if (!i) i=10;
+        if (!i) i=10; //sends output every 100ms if not more than 1000 bytes
         i--;
-        vTaskDelay(1); //with len>1000 and delay=10ms, we can handle 800kbps input
+        vTaskDelay(1); //with len>1000 and delay=10ms, we might handle 800kbps throughput
     }
 }
-
-bool  hold=0,calibrate=0,reverse=0;
-bool  changed=0;
-int  target=0; //homekit values
 
 #define SEND(message,n,i) do {LOG(#message "\n"); \
                             uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe); \
                             for (i=0;i<n;i++) uart_putc(1,_ ## message[i]); \
                             uart_flush_txfifo(1);\
                         } while(0)
-
+//hardcoded CRC16_MODBUS
 char    _open[]={0x03,0x01,0xb9,0x24}; //n=4
 char   _close[]={0x03,0x02,0xf9,0x25}; //n=4
 char   _pause[]={0x03,0x03,0x38,0xe5}; //n=4
@@ -72,9 +68,15 @@ char  _reqda9[]={0x01,0x09,0x01,0x82,0x72}; //n=5
 char _setdir0[]={0x02,0x03,0x01,0x00,0xd2,0x27}; //n=6
 char _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
 
+char   _setpos[] ={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC filled in
 char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
 char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
 char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
+
+/* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
+
+bool  hold=0,calibrate=0,reverse=0;
+int  target=0;
 
 // add this section to make your device OTA capable
 // create the extra characteristic &ota_trigger, at the end of the primary service (before the NULL)
@@ -103,14 +105,13 @@ homekit_value_t calibrate_get() {
 }
 void calibrate_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        printf("Invalid calibrate-value format: %d\n", value.format);
+        LOG("Invalid calibrate-value format: %d\n", value.format);
         return;
     }
     calibrate = value.bool_value;
-    changed=1;
-    printf("Calibrate: %d\n", calibrate);
+    LOG("Calibrate: %d\n", calibrate);
     if (calibrate) {
-        //homekit_characteristic_notify(&on, HOMEKIT_BOOL(calibrate)); //publish mode (not yet supported in accessory defintion)
+        
     }
 }
 
@@ -133,14 +134,13 @@ homekit_value_t reverse_get() {
 }
 void reverse_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        printf("Invalid reverse-value format: %d\n", value.format);
+        LOG("Invalid reverse-value format: %d\n", value.format);
         return;
     }
     reverse = value.bool_value;
-    changed=1;
-    printf("Reverse: %d\n", reverse);
+    LOG("Reverse: %d\n", reverse);
     if (reverse) {
-        //homekit_characteristic_notify(&on, HOMEKIT_BOOL(calibrate)); //publish mode (not yet supported in accessory defintion)
+        
     }
 }
 
@@ -156,6 +156,42 @@ void reverse_set(homekit_value_t value) {
     ##__VA_ARGS__
 
 homekit_characteristic_t reversed = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSED, 0, .setter=reverse_set, .getter=reverse_get);
+
+homekit_value_t hold_get() {
+    return HOMEKIT_BOOL(hold);
+}
+void hold_set(homekit_value_t value) {
+    if (value.format != homekit_format_bool) {
+        LOG("Invalid hold-value format: %d\n", value.format);
+        return;
+    }
+    LOG("H:%3d\n",value.bool_value);
+    hold = value.bool_value;
+}
+
+homekit_value_t target_get() {
+    return HOMEKIT_UINT8(target);
+}
+void target_set(homekit_value_t value) {
+    if (value.format != homekit_format_uint8) {
+        LOG("Invalid target-value format: %d\n", value.format);
+        return;
+    }
+    LOG("T:%3d\n",value.int_value);
+    target = value.int_value;
+}
+
+// void identify_task(void *_args) {
+//     vTaskDelete(NULL);
+// }
+
+void identify(homekit_value_t _value) {
+    LOG("Identify\n");
+//    xTaskCreate(identify_task, "identify", 256, NULL, 2, NULL);
+}
+
+/* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
+
 
 struct _report {
     int position;
@@ -189,17 +225,8 @@ void report_track(void *pvParameters){
     }
 }
 
-int buff[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //longest message
+int buff[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //longest valid message
 int idx=0;
-
-void shift_buff(int positions) {
-    int i;
-    for (i=positions;i<16;i++) {
-        buff[i-positions]=buff[i];
-    }
-    for (i=16-positions;i<16;i++) buff[i]=0;
-    idx-=positions;
-}
 
 void parse(int positions) {
     int i=0;
@@ -208,14 +235,14 @@ void parse(int positions) {
     else {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
         LOG("\n");
-        if (buff[3]==0x04 && buff[4]==0x02 && buff[5]==0x08) {
+        if (buff[3]==0x04 && buff[4]==0x02 && buff[5]==0x08) { //report
             report.position=buff[6];
             report.direction=buff[7];
             report.status=buff[9];
             report.calibr=buff[13];
             xQueueSend( reportQueue, (void *) &report, ( TickType_t ) 0 );
         }
-        if (buff[3]==0x01 && buff[4]==0x02 && buff[5]==0x01) {
+        if (buff[3]==0x01 && buff[4]==0x02 && buff[5]==0x01) { //position answer
             if (buff[6]==0xff){
                 current.value.int_value=j++;
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
@@ -232,28 +259,30 @@ void parse(int positions) {
 }
 
 uint  crc16(int len) {   
-  uint crc = 0xFFFF;
+    uint crc = 0xFFFF;
 
-  for (int pos = 0; pos < len; pos++)
-  {
-    crc ^= (uint)buff[pos];          // XOR byte into least sig. byte of crc
-
-    for (int i = 8; i != 0; i--) {    // Loop over each bit
-      if ((crc & 0x0001) != 0) {      // If the LSB is set
-        crc >>= 1;                    // Shift right and XOR 0xA001
-        crc ^= 0xA001;
-      }
-      else                            // Else LSB is not set
-        crc >>= 1;                    // Just shift right
+    for (int pos = 0; pos < len; pos++) {
+        crc ^= (uint)buff[pos];         // XOR byte into least sig. byte of crc
+        for (int i = 8; i != 0; i--) {  // Loop over each bit
+            if ((crc & 0x0001) != 0) {  // If the LSB is set
+                crc >>= 1;              // Shift right and XOR 0xA001
+                crc ^= 0xA001;
+            } else  crc >>= 1;          // Else LSB is not set so Just shift right
+        }
     }
-  }
-  // Note, this number has low and high bytes swapped, so use it accordingly (or swap bytes)
-  return crc;
+    return crc; // Note, this number has low and high bytes swapped, so use it accordingly (or swap bytes)
+}
+
+void shift_buff(int positions) {
+    int i;
+    for (i=positions;i<16;i++) {
+        buff[i-positions]=buff[i];
+    }
+    for (i=16-positions;i<16;i++) buff[i]=0;
+    idx-=positions;
 }
 
 void uart_parse_input(void *pvParameters) {
-    //LOG("%04x\n",crc16(5));
-
     //int i;
     for(;;) {
         buff[idx++]=uart_getc(0);
@@ -298,45 +327,6 @@ void motor_init() {
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
     reportQueue = xQueueCreate(3, sizeof(struct _report));
     xTaskCreate(report_track, "track", 512, NULL, 2, NULL);
-    //xTaskCreate(uart_send_output, "send",  256, NULL, 1, NULL);
-}
-
-homekit_value_t hold_get() {
-    return HOMEKIT_BOOL(hold);
-}
-void hold_set(homekit_value_t value) {
-    if (value.format != homekit_format_bool) {
-        printf("Invalid hold-value format: %d\n", value.format);
-        return;
-    }
-    //printf("H:%3d @ %d\n",value.bool_value,sdk_system_get_time());
-    printf("H:%3d\n",value.bool_value);
-    hold = value.bool_value;
-    changed=1;
-}
-
-homekit_value_t target_get() {
-    return HOMEKIT_UINT8(target);
-}
-void target_set(homekit_value_t value) {
-    if (value.format != homekit_format_uint8) {
-        printf("Invalid target-value format: %d\n", value.format);
-        return;
-    }
-    //printf("T:%3d @ %d\n",value.int_value,sdk_system_get_time());
-    printf("T:%3d\n",value.int_value);
-    target = value.int_value;
-    changed=1;
-}
-
-void identify_task(void *_args) {
-    vTaskDelay(5000 / portTICK_PERIOD_MS); //5 sec
-    vTaskDelete(NULL);
-}
-
-void identify(homekit_value_t _value) {
-    printf("Identify\n");
-    xTaskCreate(identify_task, "identify", 256, NULL, 2, NULL);
 }
 
 
