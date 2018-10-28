@@ -65,7 +65,7 @@ char  _reqsta[]={0x01,0x05,0x01,0x87,0x72}; //n=5
 //6
 //7
 //8
-char  _reqda9[]={0x01,0x09,0x01,0x82,0x72}; //n=5
+char  _reqcal[]={0x01,0x09,0x01,0x82,0x72}; //n=5
 char _setdir0[]={0x02,0x03,0x01,0x00,0xd2,0x27}; //n=6
 char _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
 
@@ -75,6 +75,7 @@ char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
 char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
 
 bool open_confirm=0,close_confirm=0,pause_confirm=0,uncal_confirm=0,obstr_confirm=0;
+bool reqcal_confirm=0,reqdir_confirm=0,reqpos_confirm=0;
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
 bool  hold=0,calibrate=0,reverse=0;
@@ -123,14 +124,14 @@ void calibrate_task(void *pvParameters){
     vTaskDelay(30); //allow for some screentime
     calibrate=0; calibrated.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
     homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
-    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-    } while (!uncal_confirm); uncal_confirm=0;
-    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-    } while (!close_confirm); close_confirm=0;
+    uncal_confirm=0;    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!uncal_confirm);
+    close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!close_confirm); close_confirm=0;
     //waiting for the curtain to hit the end
     while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
-    do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-    } while (!open_confirm); open_confirm=0;
+    open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!open_confirm);
     vTaskDelete(NULL);
 }
 
@@ -146,10 +147,7 @@ void calibrate_set(homekit_value_t value) {
     calibrate = value.bool_value;
     LOG("Calibrate: %d\n", calibrate);
     if ( calibrate) xTaskCreate(calibrate_task, "calibrate", 256, NULL, 1, NULL);
-    else {
-        SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-        uncal_confirm=0; //not very good coding  need to improve
-    }
+    else SEND(uncal,4,i);
 }
 
 
@@ -233,6 +231,17 @@ void report_track(void *pvParameters){
     int i,timer=1500;
     bool obstructed;
     struct _report rep;
+    
+    //collect current calibration, direction and position value
+    reqcal_confirm=0;   do { SEND(reqcal,5,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!reqcal_confirm);
+    reqdir_confirm=0;   do { SEND(reqdir,5,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!reqdir_confirm);
+    reqpos_confirm=0;   do { SEND(reqpos,5,i); vTaskDelay(CONFIRM_TIMEOUT);
+                        } while (!reqpos_confirm);
+    
+    
+
     if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
@@ -240,7 +249,7 @@ void report_track(void *pvParameters){
             if (rep.status==4) {obstructed=true; rep.status=0;}
             state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1
             homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
-            if (rep.status==0) timer=1500;
+            if (rep.status==0) timer=6000;
             
             if (calibrate){ //calibrated
                 if (obstructed) {
@@ -266,11 +275,11 @@ int idx=0;
 
 void parse(int positions) {
     int i=0;
-    static int j=0;  //remove, debug only
     if (positions<4) LOG("%02x%02x\n",buff[0],buff[1]);
     else {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
         LOG("\n");
+        
         if (buff[3]==0x03 && buff[4]==0x01)  open_confirm=1; // open confirmation
         if (buff[3]==0x03 && buff[4]==0x02) close_confirm=1; //close confirmation
         if (buff[3]==0x03 && buff[4]==0x03) pause_confirm=1; //pause confirmation
@@ -282,15 +291,18 @@ void parse(int positions) {
             report.calibr=buff[13];
             xQueueSend( reportQueue, (void *) &report, ( TickType_t ) 0 );
         }
-        if (buff[3]==0x01 && buff[4]==0x02 && buff[5]==0x01) { //position answer
-            if (buff[6]==0xff){
-                current.value.int_value=j++;
+        if (buff[3]==0x01 && buff[5]==0x01) { //answers to requests
+            if (buff[4]==0x02) { //position answer
+                if (buff[6]==0xff) current.value.int_value=50; //no meaningful concept if not calibrated
+                else current.value.int_value=buff[6];
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
-                LOG("current: %d\n",current.value.int_value);
+                reqpos_confirm=1;
             }
-            else {
-                current.value.int_value=buff[6];
-                homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
+            if (buff[4]==0x03) { //direction answer
+                reverse=buff[6]; reqdir_confirm=1;
+            }
+            if (buff[4]==0x09) { //calibr answer
+                calibrate=buff[6]; reqcal_confirm=1;
             }
         }
     }
