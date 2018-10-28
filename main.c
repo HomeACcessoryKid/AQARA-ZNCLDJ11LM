@@ -47,6 +47,7 @@ void log_send(void *pvParameters){
     }
 }
 
+#define CONFIRM_TIMEOUT 10
 #define SEND(message,n,i) do {LOG(#message "\n"); \
                             uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe); \
                             for (i=0;i<n;i++) uart_putc(1,_ ## message[i]); \
@@ -73,6 +74,7 @@ char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
 char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
 char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
 
+bool open_confirm=0,close_confirm=0,pause_confirm=0,uncal_confirm=0,obstr_confirm=0;
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
 bool  hold=0,calibrate=0,reverse=0;
@@ -100,21 +102,6 @@ homekit_characteristic_t state        = HOMEKIT_CHARACTERISTIC_(POSITION_STATE, 
 homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
 homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETECTED, 0);
 
-homekit_value_t calibrate_get() {
-    return HOMEKIT_BOOL(calibrate);
-}
-void calibrate_set(homekit_value_t value) {
-    if (value.format != homekit_format_bool) {
-        LOG("Invalid calibrate-value format: %d\n", value.format);
-        return;
-    }
-    calibrate = value.bool_value;
-    LOG("Calibrate: %d\n", calibrate);
-    if (calibrate) {
-        
-    }
-}
-
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_CALIBRATED HOMEKIT_CUSTOM_UUID("F0000004")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_CALIBRATED(_value, ...) \
     .type = HOMEKIT_CHARACTERISTIC_CUSTOM_CALIBRATED, \
@@ -126,7 +113,44 @@ void calibrate_set(homekit_value_t value) {
     .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
+homekit_value_t calibrate_get() ;
+void calibrate_set(homekit_value_t value) ;
 homekit_characteristic_t calibrated = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
+
+void calibrate_task(void *pvParameters){
+    int i;
+    
+    vTaskDelay(30); //allow for some screentime
+    calibrate=0; calibrated.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
+    homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
+    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+    } while (!uncal_confirm); uncal_confirm=0;
+    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+    } while (!close_confirm); close_confirm=0;
+    //waiting for the curtain to hit the end
+    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
+    do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+    } while (!open_confirm); open_confirm=0;
+    vTaskDelete(NULL);
+}
+
+homekit_value_t calibrate_get() {
+    return HOMEKIT_BOOL(calibrate);
+}
+void calibrate_set(homekit_value_t value) {
+    int i;
+    if (value.format != homekit_format_bool) {
+        LOG("Invalid calibrate-value format: %d\n", value.format);
+        return;
+    }
+    calibrate = value.bool_value;
+    LOG("Calibrate: %d\n", calibrate);
+    if ( calibrate) xTaskCreate(calibrate_task, "calibrate", 256, NULL, 1, NULL);
+    else {
+        SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+        uncal_confirm=0; //not very good coding  need to improve
+    }
+}
 
 
 homekit_value_t reverse_get() {
@@ -217,9 +241,18 @@ void report_track(void *pvParameters){
             state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1
             homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
             if (rep.status==0) timer=1500;
-            if (obstructed) {
-                obstruction.value.bool_value=1;
-                homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));
+            
+            if (calibrate){ //calibrated
+                if (obstructed) {
+                    obstruction.value.bool_value=1;
+                    homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.bool_value));
+                }
+            } else { //uncalibrated
+                if (obstructed) obstr_confirm=1;
+                if (rep.calibr) {
+                    calibrate=1;calibrated.value.bool_value=1;
+                    homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
+                }
             }
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state=%d\n",state.value.int_value);
@@ -238,6 +271,10 @@ void parse(int positions) {
     else {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
         LOG("\n");
+        if (buff[3]==0x03 && buff[4]==0x01)  open_confirm=1; // open confirmation
+        if (buff[3]==0x03 && buff[4]==0x02) close_confirm=1; //close confirmation
+        if (buff[3]==0x03 && buff[4]==0x03) pause_confirm=1; //pause confirmation
+        if (buff[3]==0x03 && buff[4]==0x07) uncal_confirm=1; //uncal confirmation
         if (buff[3]==0x04 && buff[4]==0x02 && buff[5]==0x08) { //report
             report.position=buff[6];
             report.direction=buff[7];
@@ -249,8 +286,6 @@ void parse(int positions) {
             if (buff[6]==0xff){
                 current.value.int_value=j++;
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
-                if (j==7) {obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));}
-                if (j==9) {obstruction.value.bool_value=0;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));}
                 LOG("current: %d\n",current.value.int_value);
             }
             else {
