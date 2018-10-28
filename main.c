@@ -129,7 +129,7 @@ void calibrate_task(void *pvParameters){
     close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
                         } while (!close_confirm); close_confirm=0;
     //waiting for the curtain to hit the end
-    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
+    obstr_confirm=0;    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
     open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
                         } while (!open_confirm);
     vTaskDelete(NULL);
@@ -249,7 +249,7 @@ void report_track(void *pvParameters){
             if (rep.status==4) {obstructed=true; rep.status=0;}
             state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1
             homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
-            if (rep.status==0) timer=6000;
+            if (state.value.int_value==2) timer=6000;
             
             if (calibrate){ //calibrated
                 if (obstructed) {
