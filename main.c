@@ -207,19 +207,22 @@ struct _report {
 QueueHandle_t reportQueue = NULL;
 void report_track(void *pvParameters){
     int i,timer=1500;
+    bool obstructed;
     struct _report rep;
     if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
-            timer=100;
-            if (rep.status==1){state.value.int_value=0;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going min
-            if (rep.status==2){state.value.int_value=1;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));} //going max
-            if (rep.status==0){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));timer=1500;} //stopped
-//             if (rep.status==4){state.value.int_value=2;homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
-//                 obstruction.value.bool_value=1;homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));
-//                 timer=1500;} //obstructed
-            LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x\n",rep.position,rep.direction,rep.status,rep.calibr);
-            LOG("state: %d\n",state.value.int_value);
+            obstructed=false; timer=100;
+            if (rep.status==4) {obstructed=true; rep.status=0;}
+            state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1
+            homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
+            if (rep.status==0) timer=1500;
+            if (obstructed) {
+                obstruction.value.bool_value=1;
+                homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.int_value));
+            }
+            LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
+            LOG("state=%d\n",state.value.int_value);
         }
         SEND(reqpos,5,i);
     }
