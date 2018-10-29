@@ -155,15 +155,17 @@ homekit_value_t reverse_get() {
     return HOMEKIT_BOOL(reverse);
 }
 void reverse_set(homekit_value_t value) {
+    int i;
     if (value.format != homekit_format_bool) {
         LOG("Invalid reverse-value format: %d\n", value.format);
         return;
     }
     reverse = value.bool_value;
     LOG("Reverse: %d\n", reverse);
-    if (reverse) {
-        
-    }
+    if (reverse) SEND(setdir1,6,i);
+    else         SEND(setdir0,6,i);
+    vTaskDelay(3);
+    SEND(reqdir,5,i);
 }
 
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_REVERSED HOMEKIT_CUSTOM_UUID("F0000005")
@@ -300,6 +302,8 @@ void parse(int positions) {
             }
             if (buff[4]==0x03) { //direction answer
                 reverse=buff[6]; reqdir_confirm=1;
+                reversed.value.bool_value=reverse;
+                homekit_characteristic_notify(&reversed,HOMEKIT_BOOL(reversed.value.bool_value));    
             }
             if (buff[4]==0x09) { //calibr answer
                 calibrate=buff[6]; reqcal_confirm=1;
