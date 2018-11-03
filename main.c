@@ -75,7 +75,7 @@ char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
 char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
 
 bool open_confirm=0,close_confirm=0,pause_confirm=0,uncal_confirm=0,obstr_confirm=0;
-bool reqcal_confirm=0,reqdir_confirm=0,reqpos_confirm=0;
+bool reqcal_confirm=0,reqdir_confirm=0,reqpos_confirm=0,setdir_confirm=0;
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
 bool  hold=0,calibrate=0,reverse=0;
@@ -127,7 +127,7 @@ void calibrate_task(void *pvParameters){
     uncal_confirm=0;    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
                         } while (!uncal_confirm);
     close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!close_confirm); close_confirm=0;
+                        } while (!close_confirm);
     //waiting for the curtain to hit the end
     obstr_confirm=0;    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
     open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
@@ -162,9 +162,9 @@ void reverse_set(homekit_value_t value) {
     }
     reverse = value.bool_value;
     LOG("Reverse: %d\n", reverse);
-    if (reverse) SEND(setdir1,6,i);
-    else         SEND(setdir0,6,i);
-    vTaskDelay(3);
+    setdir_confirm=0;
+    if (reverse) do {SEND(setdir1,6,i); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
+    else         do {SEND(setdir0,6,i); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
     SEND(reqdir,5,i);
 }
 
@@ -309,6 +309,9 @@ void parse(int positions) {
                 calibrate=buff[6]; reqcal_confirm=1;
             }
         }
+        if (buff[3]==0x02 && buff[4]==0x03 && buff[5]==0x01) {
+            setdir_confirm=1;
+        }
     }
 }
 
@@ -362,7 +365,11 @@ void uart_parse_input(void *pvParameters) {
                 if (!crc16(9)) {parse(9); shift_buff(9); continue;}
                 if (idx>=9)    {          shift_buff(8); continue;} // failure for type 1 or 2 so flush it
             }
-            if ( buff[3]==4 && idx==16)  {
+            if ( buff[3]==4 && buff[4]==3 && buff[5]==1 && idx==8)  {
+                if (!crc16(8)) parse(8);
+                shift_buff(8); continue;
+            }
+            if ( buff[3]==4 && buff[4]==2 && buff[5]==8 && idx==16)  {
                 if (!crc16(16)) parse(16);
                 shift_buff(16); continue;
             }
