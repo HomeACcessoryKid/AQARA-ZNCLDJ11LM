@@ -89,7 +89,7 @@ struct _order {
     char chars[6];
 } order;
 QueueHandle_t senderQueue = NULL;
-bool obstr_confirm=0,aware=0;
+bool obstr_confirm=0,aware=0,status=0;
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
@@ -131,23 +131,29 @@ homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETE
     .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
+homekit_value_t calibrate_get();
 void calibrate_set(homekit_value_t value) ;
-homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set);
+homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
 
 void calibrate_task(void *pvParameters){
     vTaskDelay(30); //allow for some screentime
-    calibrated=0; calibration.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
-    homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value)); //user feedback
+//     calibrated=0; calibration.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
+//     homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value)); //user feedback
     SEND(uncal);
+    SEND(reqcal); //sets it back to zero on the screen to indicate that it is not yet finished
     SEND(open);
     obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(close);
     obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(reqpos);
     SEND(reqcal);
+    SEND(reqsta);
     vTaskDelete(NULL);
 }
 
+homekit_value_t calibrate_get() {
+    return HOMEKIT_BOOL(calibrated);
+}
 void calibrate_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
         LOG("Invalid calibrated-value format: %d\n", value.format);
@@ -269,7 +275,7 @@ struct _report {
 
 QueueHandle_t reportQueue = NULL;
 void report_task(void *pvParameters){
-    int timer=6000;
+    int timer=1000;
     bool obstructed;
     struct _report rep;
     
@@ -280,9 +286,9 @@ void report_task(void *pvParameters){
             if (rep.status==4) {obstructed=true; rep.status=0;}
             state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1 3->2
             homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
-            if (state.value.int_value==2) timer=6000;
+            if (state.value.int_value==2) timer=1000;
             
-            calibrated=rep.calibr;calibration.value.bool_value=1;
+            calibrated=rep.calibr;calibration.value.bool_value=calibrated;
             homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value));
 
             obstr_confirm=obstructed;
@@ -295,12 +301,9 @@ void report_task(void *pvParameters){
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
             
-            if (!rep.status && aware) { //it just stopped or blocked and is aware
-                target.value.int_value=rep.position;
-                homekit_characteristic_notify(&target,HOMEKIT_UINT8(target.value.int_value));
-            }
         }
         SEND(reqpos);
+        SEND(reqsta);
     }
 }
 
@@ -345,6 +348,14 @@ void parse(int positions) {
                 reversed=buff[6];
                 direction.value.bool_value=reversed;
                 homekit_characteristic_notify(&direction,HOMEKIT_BOOL(direction.value.bool_value));    
+            }
+            if (buff[4]==0x05) { //status answer
+                xTaskNotifyGive( SendTask );
+                status=buff[6];
+                if (!status && aware && target.value.int_value!=current.value.int_value) { //it is stopped (not blocked) and is aware
+                    target.value.int_value=current.value.int_value;
+                    homekit_characteristic_notify(&target,HOMEKIT_UINT8(target.value.int_value));
+                }
             }
             if (buff[4]==0x09) { //calibr answer
                 xTaskNotifyGive( SendTask );
