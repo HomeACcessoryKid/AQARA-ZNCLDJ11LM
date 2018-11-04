@@ -90,6 +90,7 @@ struct _order {
 } order;
 QueueHandle_t senderQueue = NULL;
 bool obstr_confirm=0,aware=0,status=0;
+int old_target;
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
@@ -142,8 +143,12 @@ void calibrate_task(void *pvParameters){
     SEND(uncal);
     SEND(reqcal); //sets it back to zero on the screen to indicate that it is not yet finished
     SEND(open);
+    vTaskDelay(CONFIRM_TIMEOUT);
+    SEND(open); //else system reports block
     obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(close);
+    vTaskDelay(CONFIRM_TIMEOUT);
+    SEND(close); //else system reports block
     obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(reqpos);
     SEND(reqcal);
@@ -162,7 +167,7 @@ void calibrate_set(homekit_value_t value) {
     calibrated = value.bool_value;
     LOG("Calibrate: %d\n", calibrated);
     if ( calibrated) xTaskCreate(calibrate_task, "calibrated", 256, NULL, 1, NULL);
-    else SEND(uncal);
+    else {SEND(uncal); SEND(reqpos);}
 }
 
 
@@ -216,16 +221,23 @@ void target_set(homekit_value_t value) {
     uint crc = 0xFFFF;
     int i,j;
     char setpos[]={0x55,0xfe,0xfe,0x03,0x04,0x00};
-    setpos[5]=value.int_value;
-    for ( j = 0; j < 6; j++) {
-        crc ^= (uint)setpos[j];         // XOR byte into least sig. byte of crc
-        for ( i = 8; i != 0; i--) {     // Loop over each bit
-            if ((crc & 0x0001) != 0) {  // If the LSB is set
-                crc>>=1; crc^=0xA001;   // Shift right and XOR 0xA001
-            } else  crc >>= 1;          // Else LSB is not set so Just shift right
-    }   }   // Note, crc has low and high bytes swapped, so use it accordingly (or swap bytes)
-    _setpos[2]=value.int_value;_setpos[3]=crc%256;_setpos[4]=crc/256;
-    SEND(setpos);
+
+    if (aware) {
+        setpos[5]=value.int_value;
+        for ( j = 0; j < 6; j++) {
+            crc ^= (uint)setpos[j];         // XOR byte into least sig. byte of crc
+            for ( i = 8; i != 0; i--) {     // Loop over each bit
+                if ((crc & 0x0001) != 0) {  // If the LSB is set
+                    crc>>=1; crc^=0xA001;   // Shift right and XOR 0xA001
+                } else  crc >>= 1;          // Else LSB is not set so Just shift right
+        }   }   // Note, crc has low and high bytes swapped, so use it accordingly (or swap bytes)
+        _setpos[2]=value.int_value;_setpos[3]=crc%256;_setpos[4]=crc/256;
+        SEND(setpos);
+    } else {
+        if (old_target<value.int_value) SEND(open);
+        if (old_target>value.int_value) SEND(close);
+    }
+    old_target=value.int_value;
 }
 
 
@@ -302,6 +314,7 @@ void report_task(void *pvParameters){
             LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
             
         }
+        SEND(reqcal);
         SEND(reqpos);
         SEND(reqsta);
     }
@@ -336,6 +349,7 @@ void parse(int positions) {
                 if (buff[6]==0xff) {
                     current.value.int_value=22; //no meaningful concept if not aware
                     aware=0;
+                    if (calibrated) SEND(close); //force a renewed awareness
                 } else {
                     current.value.int_value=buff[6];
                     aware=1;
