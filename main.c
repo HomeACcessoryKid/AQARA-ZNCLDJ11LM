@@ -93,7 +93,6 @@ bool obstr_confirm=0,aware=0;
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
-int  target=0;
 bool  hold=0,calibrated=0,reversed=0;
 
 // add this section to make your device OTA capable
@@ -114,9 +113,12 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 //    config.accessories[0]->config_number=c_hash;
 // end of OTA add-in instructions
 
+void target_set(homekit_value_t value);
+homekit_characteristic_t target       = HOMEKIT_CHARACTERISTIC_(TARGET_POSITION,  0, .setter=target_set);
 homekit_characteristic_t state        = HOMEKIT_CHARACTERISTIC_(POSITION_STATE,   2);
 homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
 homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETECTED, 0);
+
 
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_CALIBRATED HOMEKIT_CUSTOM_UUID("F0000004")
 #define HOMEKIT_DECLARE_CHARACTERISTIC_CUSTOM_CALIBRATED(_value, ...) \
@@ -129,9 +131,8 @@ homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETE
     .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
-homekit_value_t calibrate_get() ;
 void calibrate_set(homekit_value_t value) ;
-homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
+homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set);
 
 void calibrate_task(void *pvParameters){
     vTaskDelay(30); //allow for some screentime
@@ -147,9 +148,6 @@ void calibrate_task(void *pvParameters){
     vTaskDelete(NULL);
 }
 
-homekit_value_t calibrate_get() {
-    return HOMEKIT_BOOL(calibrated);
-}
 void calibrate_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
         LOG("Invalid calibrated-value format: %d\n", value.format);
@@ -201,21 +199,18 @@ void hold_set(homekit_value_t value) {
     hold = value.bool_value;
 }
 
-homekit_value_t target_get() {
-    return HOMEKIT_UINT8(target);
-}
+
 void target_set(homekit_value_t value) {
     if (value.format != homekit_format_uint8) {
         LOG("Invalid target-value format: %d\n", value.format);
         return;
     }
     LOG("T:%3d\n",value.int_value);
-    target = value.int_value;
 
     uint crc = 0xFFFF;
     int i,j;
     char setpos[]={0x55,0xfe,0xfe,0x03,0x04,0x00};
-    setpos[5]=target;
+    setpos[5]=value.int_value;
     for ( j = 0; j < 6; j++) {
         crc ^= (uint)setpos[j];         // XOR byte into least sig. byte of crc
         for ( i = 8; i != 0; i--) {     // Loop over each bit
@@ -223,8 +218,7 @@ void target_set(homekit_value_t value) {
                 crc>>=1; crc^=0xA001;   // Shift right and XOR 0xA001
             } else  crc >>= 1;          // Else LSB is not set so Just shift right
     }   }   // Note, crc has low and high bytes swapped, so use it accordingly (or swap bytes)
-    LOG("%02x%02x%02x\n",_setpos[2],_setpos[3],_setpos[4]);
-    _setpos[2]=target;_setpos[3]=crc%256;_setpos[4]=crc/256;
+    _setpos[2]=value.int_value;_setpos[3]=crc%256;_setpos[4]=crc/256;
     SEND(setpos);
 }
 
@@ -300,6 +294,11 @@ void report_task(void *pvParameters){
 
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
+            
+            if (!rep.status && aware) { //it just stopped or blocked and is aware
+                target.value.int_value=rep.position;
+                homekit_characteristic_notify(&target,HOMEKIT_UINT8(target.value.int_value));
+            }
         }
         SEND(reqpos);
     }
@@ -462,11 +461,7 @@ homekit_accessory_t *accessories[] = {
                 .characteristics=(homekit_characteristic_t*[]){
                     HOMEKIT_CHARACTERISTIC(NAME, "Curtain"),
                     &current,
-                    HOMEKIT_CHARACTERISTIC(
-                        TARGET_POSITION, 0,
-                        .getter=target_get,
-                        .setter=target_set
-                    ),
+                    &target,
                     &state,
                     HOMEKIT_CHARACTERISTIC(
                         HOLD_POSITION, 0,
