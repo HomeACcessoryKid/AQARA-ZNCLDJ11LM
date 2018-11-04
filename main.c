@@ -47,32 +47,50 @@ void log_send(void *pvParameters){
     }
 }
 
-#define CONFIRM_TIMEOUT 10
-#define SEND(message,n,i) do {LOG(#message "\n"); \
-                            uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe); \
-                            for (i=0;i<n;i++) uart_putc(1,_ ## message[i]); \
-                            uart_flush_txfifo(1);\
-                        } while(0)
 //hardcoded CRC16_MODBUS
-char    _open[]={0x03,0x01,0xb9,0x24}; //n=4
-char   _close[]={0x03,0x02,0xf9,0x25}; //n=4
-char   _pause[]={0x03,0x03,0x38,0xe5}; //n=4
-char   _uncal[]={0x03,0x07,0x39,0x26}; //n=4
-char  _reqpos[]={0x01,0x02,0x01,0x85,0x42}; //n=5
-char  _reqdir[]={0x01,0x03,0x01,0x84,0xd2}; //n=5
-char  _reqda4[]={0x01,0x04,0x01,0x86,0xe2}; //n=5
-char  _reqsta[]={0x01,0x05,0x01,0x87,0x72}; //n=5
+char        _open[]={0x03,0x01,0xb9,0x24}; //n=4
+#define     _open_n 4
+char       _close[]={0x03,0x02,0xf9,0x25}; //n=4
+#define    _close_n 4
+char       _pause[]={0x03,0x03,0x38,0xe5}; //n=4
+#define    _pause_n 4
+char       _uncal[]={0x03,0x07,0x39,0x26}; //n=4
+#define    _uncal_n 4
+char      _reqpos[]={0x01,0x02,0x01,0x85,0x42}; //n=5
+#define   _reqpos_n 5
+char      _reqdir[]={0x01,0x03,0x01,0x84,0xd2}; //n=5
+#define   _reqdir_n 5
+char      _reqda4[]={0x01,0x04,0x01,0x86,0xe2}; //n=5
+#define   _reqda4_n 5
+char      _reqsta[]={0x01,0x05,0x01,0x87,0x72}; //n=5
+#define   _reqsta_n 5
 //6
 //7
 //8
-char  _reqcal[]={0x01,0x09,0x01,0x82,0x72}; //n=5
-char _setdir0[]={0x02,0x03,0x01,0x00,0xd2,0x27}; //n=6
-char _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
-
-char   _setpos[] ={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC filled in
-char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
-char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
-char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
+char      _reqcal[]={0x01,0x09,0x01,0x82,0x72}; //n=5
+#define   _reqcal_n 5
+char     _setdir0[]={0x02,0x03,0x01,0x00,0xd2,0x27}; //n=6
+#define  _setdir0_n 6
+char     _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
+#define  _setdir1_n 6
+char      _setpos[]={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC filled in
+#define   _setpos_n 5
+// char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
+// char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
+// char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
+#define SEND(message) do {LOG(#message "\n"); \
+                            taskENTER_CRITICAL(); \
+                            memcpy(order.chars, _ ## message, _ ## message ## _n); \
+                            order.len=_ ## message ## _n; \
+                            xQueueSend( senderQueue, (void *) &order, ( TickType_t ) 0 ); \
+                            taskEXIT_CRITICAL(); \
+                        } while(0)
+#define CONFIRM_TIMEOUT 10
+struct _order {
+    int len;
+    char chars[6];
+} order;
+QueueHandle_t senderQueue = NULL;
 
 bool open_confirm=0,close_confirm=0,pause_confirm=0,uncal_confirm=0,obstr_confirm=0;
 bool reqcal_confirm=0,reqdir_confirm=0,reqpos_confirm=0,setdir_confirm=0;
@@ -119,19 +137,17 @@ void calibrate_set(homekit_value_t value) ;
 homekit_characteristic_t calibrated = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
 
 void calibrate_task(void *pvParameters){
-    int i;
-    
     vTaskDelay(30); //allow for some screentime
     calibrate=0; calibrated.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
     homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
-    uncal_confirm=0;    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!uncal_confirm);
-    close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!close_confirm);
-    //waiting for the curtain to hit the end
-    obstr_confirm=0;    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
-    open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!open_confirm);
+//     uncal_confirm=0;    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+//                         } while (!uncal_confirm);
+//     close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+//                         } while (!close_confirm);
+//     //waiting for the curtain to hit the end
+//     obstr_confirm=0;    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
+//     open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
+//                         } while (!open_confirm);
     vTaskDelete(NULL);
 }
 
@@ -139,7 +155,6 @@ homekit_value_t calibrate_get() {
     return HOMEKIT_BOOL(calibrate);
 }
 void calibrate_set(homekit_value_t value) {
-    int i;
     if (value.format != homekit_format_bool) {
         LOG("Invalid calibrate-value format: %d\n", value.format);
         return;
@@ -147,7 +162,7 @@ void calibrate_set(homekit_value_t value) {
     calibrate = value.bool_value;
     LOG("Calibrate: %d\n", calibrate);
     if ( calibrate) xTaskCreate(calibrate_task, "calibrate", 256, NULL, 1, NULL);
-    else SEND(uncal,4,i);
+    else SEND(uncal);
 }
 
 
@@ -155,7 +170,6 @@ homekit_value_t reverse_get() {
     return HOMEKIT_BOOL(reverse);
 }
 void reverse_set(homekit_value_t value) {
-    int i;
     if (value.format != homekit_format_bool) {
         LOG("Invalid reverse-value format: %d\n", value.format);
         return;
@@ -163,9 +177,9 @@ void reverse_set(homekit_value_t value) {
     reverse = value.bool_value;
     LOG("Reverse: %d\n", reverse);
     setdir_confirm=0;
-    if (reverse) do {SEND(setdir1,6,i); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
-    else         do {SEND(setdir0,6,i); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
-    SEND(reqdir,5,i);
+    if (reverse) do {SEND(setdir1); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
+    else         do {SEND(setdir0); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
+    SEND(reqdir);
 }
 
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_REVERSED HOMEKIT_CUSTOM_UUID("F0000005")
@@ -217,6 +231,27 @@ void identify(homekit_value_t _value) {
 /* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
 
+
+void sender_task(void *pvParameters){
+    int i,attempt;
+    struct _order ordr;
+
+    if( senderQueue == 0 ) {LOG("NO SEND QUEUE!\n");vTaskDelete(NULL);}
+    ulTaskNotifyTake( pdTRUE, 0 );
+    while(1) {
+        if( xQueueReceive( senderQueue, (void*)&ordr, (TickType_t) portMAX_DELAY ) ) {
+            attempt=2;
+            do {uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe);
+                for (i=0;i<ordr.len;i++) uart_putc(1,ordr.chars[i]);
+                uart_flush_txfifo(1);
+                for (i=0;i<ordr.len;i++) LOG("%02x",ordr.chars[i]); LOG(" sent\n");
+                if (ulTaskNotifyTake( pdTRUE, CONFIRM_TIMEOUT )==pdTRUE) {LOG("continue\n"); break; } //semafore to signal a response received
+            } while (--attempt);
+        }        
+    }
+}
+
+
 struct _report {
     int position;
     int direction;
@@ -229,22 +264,12 @@ struct _report {
 } report;
 
 QueueHandle_t reportQueue = NULL;
-void report_track(void *pvParameters){
-    int i,timer=1500;
+void report_task(void *pvParameters){
+    int timer=1500;
     bool obstructed;
     struct _report rep;
     
-    //collect current calibration, direction and position value
-    reqcal_confirm=0;   do { SEND(reqcal,5,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!reqcal_confirm);
-    reqdir_confirm=0;   do { SEND(reqdir,5,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!reqdir_confirm);
-    reqpos_confirm=0;   do { SEND(reqpos,5,i); vTaskDelay(CONFIRM_TIMEOUT);
-                        } while (!reqpos_confirm);
-    
-    
-
-    if( reportQueue == 0 ) {LOG("NO QUEUE!\n");vTaskDelete(NULL);}
+    if( reportQueue == 0 ) {LOG("NO REPORT QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
             obstructed=false; timer=100;
@@ -268,10 +293,11 @@ void report_track(void *pvParameters){
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state=%d\n",state.value.int_value);
         }
-        SEND(reqpos,5,i);
+        //SEND(reqpos,5,i);
     }
 }
 
+static TaskHandle_t SendTask = NULL;
 int buff[16]={0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0}; //longest valid message
 int idx=0;
 
@@ -295,6 +321,7 @@ void parse(int positions) {
         }
         if (buff[3]==0x01 && buff[5]==0x01) { //answers to requests
             if (buff[4]==0x02) { //position answer
+                xTaskNotifyGive( SendTask );
                 if (buff[6]==0xff) current.value.int_value=50; //no meaningful concept if not calibrated
                 else current.value.int_value=buff[6];
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
@@ -304,9 +331,11 @@ void parse(int positions) {
                 reverse=buff[6]; reqdir_confirm=1;
                 reversed.value.bool_value=reverse;
                 homekit_characteristic_notify(&reversed,HOMEKIT_BOOL(reversed.value.bool_value));    
+                xTaskNotifyGive( SendTask );
             }
             if (buff[4]==0x09) { //calibr answer
                 calibrate=buff[6]; reqcal_confirm=1;
+                xTaskNotifyGive( SendTask );
             }
         }
         if (buff[3]==0x02 && buff[4]==0x03 && buff[5]==0x01) {
@@ -387,7 +416,14 @@ void motor_init() {
 
     xTaskCreate(uart_parse_input, "parse", 256, NULL, 1, NULL);
     reportQueue = xQueueCreate(3, sizeof(struct _report));
-    xTaskCreate(report_track, "track", 512, NULL, 2, NULL);
+    xTaskCreate(report_task, "Report", 512, NULL, 2, NULL);
+    senderQueue = xQueueCreate(5, sizeof(struct _order));
+    xTaskCreate( sender_task, "Sender", 256, NULL, 1, &SendTask );
+    //collect current calibration, direction and position value
+    SEND(reqcal);
+    SEND(reqdir);
+    SEND(reqpos);
+
 }
 
 
