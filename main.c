@@ -46,6 +46,7 @@ void log_send(void *pvParameters){
         vTaskDelay(1); //with len>1000 and delay=10ms, we might handle 800kbps throughput
     }
 }
+//==================== END OF UDP LOG COLLECTOR ===================
 
 //hardcoded CRC16_MODBUS
 char        _open[]={0x03,0x01,0xb9,0x24}; //n=4
@@ -75,9 +76,6 @@ char     _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
 #define  _setdir1_n 6
 char      _setpos[]={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC filled in
 #define   _setpos_n 5
-// char _setpos00[] ={0x03,0x04,0x00,0xe6,0xe2}; //n=5
-// char _setpos50[] ={0x03,0x04,0x32,0x67,0x37}; //n=5
-// char _setpos100[]={0x03,0x04,0x64,0xe7,0x09}; //n=5
 #define SEND(message) do {LOG(#message "\n"); \
                             taskENTER_CRITICAL(); \
                             memcpy(order.chars, _ ## message, _ ## message ## _n); \
@@ -95,8 +93,8 @@ bool obstr_confirm=0,aware=0;
 
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
-bool  hold=0,calibrated=0,reverse=0;
 int  target=0;
+bool  hold=0,calibrated=0,reversed=0;
 
 // add this section to make your device OTA capable
 // create the extra characteristic &ota_trigger, at the end of the primary service (before the NULL)
@@ -140,9 +138,9 @@ void calibrate_task(void *pvParameters){
     calibrated=0; calibration.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
     homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value)); //user feedback
     SEND(uncal);
-    SEND(close);
-    obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(open);
+    obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
+    SEND(close);
     obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
     SEND(reqpos);
     SEND(reqcal);
@@ -164,17 +162,14 @@ void calibrate_set(homekit_value_t value) {
 }
 
 
-homekit_value_t reverse_get() {
-    return HOMEKIT_BOOL(reverse);
-}
 void reverse_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        LOG("Invalid reverse-value format: %d\n", value.format);
+        LOG("Invalid reversed-value format: %d\n", value.format);
         return;
     }
-    reverse = value.bool_value;
-    LOG("Reverse: %d\n", reverse);
-    if (reverse) SEND(setdir1); else SEND(setdir0);
+    reversed = value.bool_value;
+    LOG("Reverse: %d\n", reversed);
+    if (reversed) SEND(setdir1); else SEND(setdir0);
     SEND(reqdir);
     SEND(reqcal);
     SEND(reqpos);
@@ -191,7 +186,8 @@ void reverse_set(homekit_value_t value) {
     .value = HOMEKIT_BOOL_(_value), \
     ##__VA_ARGS__
 
-homekit_characteristic_t reversed = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSED, 0, .setter=reverse_set, .getter=reverse_get);
+homekit_characteristic_t direction = HOMEKIT_CHARACTERISTIC_(CUSTOM_REVERSED, 0, .setter=reverse_set);
+
 
 homekit_value_t hold_get() {
     return HOMEKIT_BOOL(hold);
@@ -231,6 +227,7 @@ void target_set(homekit_value_t value) {
     _setpos[2]=target;_setpos[3]=crc%256;_setpos[4]=crc/256;
     SEND(setpos);
 }
+
 
 // void identify_task(void *_args) {
 //     vTaskDelete(NULL);
@@ -346,9 +343,9 @@ void parse(int positions) {
             }
             if (buff[4]==0x03) { //direction answer
                 xTaskNotifyGive( SendTask );
-                reverse=buff[6];
-                reversed.value.bool_value=reverse;
-                homekit_characteristic_notify(&reversed,HOMEKIT_BOOL(reversed.value.bool_value));    
+                reversed=buff[6];
+                direction.value.bool_value=reversed;
+                homekit_characteristic_notify(&direction,HOMEKIT_BOOL(direction.value.bool_value));    
             }
             if (buff[4]==0x09) { //calibr answer
                 xTaskNotifyGive( SendTask );
@@ -407,20 +404,20 @@ void uart_parse_input(void *pvParameters) {
                 if (!crc16(7)) {parse(7); shift_buff(7); continue;}
                 if (!crc16(8)) {parse(8); shift_buff(8); continue;}
                 if (idx>=8)    {          shift_buff(7); continue;} // failure for type 3 so flush it
-            }
+            } //BUG FIX these shifts for failures should be 1 only
             if (  (buff[3]==1||buff[3]==2) && idx>=8 ) {
                 if (!crc16(8)) {parse(8); shift_buff(8); continue;}
                 if (!crc16(9)) {parse(9); shift_buff(9); continue;}
                 if (idx>=9)    {          shift_buff(8); continue;} // failure for type 1 or 2 so flush it
-            }
+            } //BUG FIX these shifts for failures should be 1 only
             if ( buff[3]==4 && buff[4]==3 && buff[5]==1 && idx==8)  {
                 if (!crc16(8)) parse(8);
                 shift_buff(8); continue;
-            }
+            } //BUG FIX these shifts for failures should be 1 only
             if ( buff[3]==4 && buff[4]==2 && buff[5]==8 && idx==16)  {
                 if (!crc16(16)) parse(16);
                 shift_buff(16); continue;
-            }
+            } //BUG FIX these shifts for failures should be 1 only
             if (idx==16) LOG("something went wrong: idx=16!\n");
             break;
         }
@@ -453,7 +450,7 @@ homekit_accessory_t *accessories[] = {
         .services=(homekit_service_t*[]){
             HOMEKIT_SERVICE(ACCESSORY_INFORMATION,
                 .characteristics=(homekit_characteristic_t*[]){
-                    HOMEKIT_CHARACTERISTIC(NAME, "AQARA-curtain-motor-ZNCLDJ11M"),
+                    HOMEKIT_CHARACTERISTIC(NAME, "AQARA-curtain"),
                     &manufacturer,
                     &serial,
                     &model,
@@ -479,7 +476,7 @@ homekit_accessory_t *accessories[] = {
                     &obstruction,
                     &ota_trigger,
                     &calibration,
-                    &reversed,
+                    &direction,
                     NULL
                 }),
             NULL
