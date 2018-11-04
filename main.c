@@ -1,6 +1,7 @@
 /*  (c) 2018 HomeAccessoryKid
- *  This example drives a curtain motor as offered on e.g. alibaba
- *  with the brand of Aqara. It uses any ESP8266 with as little as 1MB flash. 
+ *  This example drives a curtain motor Aqara ZNCLDJ11LM as offered on
+ *  e.g. alibaba. It uses any ESP8266 with as little as 1MB flash. 
+ *  connect ESP Rx to motor TX and ESP GPIO-2 to motor RX and GND
  */
 
 #include <stdio.h>
@@ -11,10 +12,8 @@
 #include <esp8266.h>
 #include <FreeRTOS.h>
 #include <task.h>
-
 #include <homekit/homekit.h>
 #include <homekit/characteristics.h>
-
 #include <string.h>
 #include "lwip/api.h"
 
@@ -61,8 +60,7 @@ char      _reqpos[]={0x01,0x02,0x01,0x85,0x42}; //n=5
 #define   _reqpos_n 5
 char      _reqdir[]={0x01,0x03,0x01,0x84,0xd2}; //n=5
 #define   _reqdir_n 5
-char      _reqda4[]={0x01,0x04,0x01,0x86,0xe2}; //n=5
-#define   _reqda4_n 5
+//4
 char      _reqsta[]={0x01,0x05,0x01,0x87,0x72}; //n=5
 #define   _reqsta_n 5
 //6
@@ -92,7 +90,7 @@ QueueHandle_t senderQueue = NULL;
 bool obstr_confirm=0,aware=0,status=0;
 int old_target;
 
-/* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
+/* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS =============================================================== */
 
 bool  hold=0,calibrated=0,reversed=0;
 
@@ -134,7 +132,7 @@ homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETE
 
 homekit_value_t calibrate_get();
 void calibrate_set(homekit_value_t value) ;
-homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
+homekit_characteristic_t calibration=HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED,0,.setter=calibrate_set,.getter=calibrate_get);
 
 void calibrate_task(void *pvParameters){
     vTaskDelay(30); //allow for some screentime
@@ -253,7 +251,6 @@ void identify(homekit_value_t _value) {
 /* ============== END HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
 
-
 void sender_task(void *pvParameters){
     int i,attempt;
     struct _order ordr;
@@ -284,7 +281,6 @@ struct _report {
     //int data8;
     int calibr;
 } report;
-
 QueueHandle_t reportQueue = NULL;
 void report_task(void *pvParameters){
     int timer=1000;
@@ -305,18 +301,15 @@ void report_task(void *pvParameters){
 
             obstr_confirm=obstructed;
             obstruction.value.bool_value=obstructed;
-            if (!aware || !calibrated) obstruction.value.bool_value=0; //use old value of 'aware' to prevent incorrect obstruction report
+            if (!aware || !calibrated) obstruction.value.bool_value=0; //old value of aware else incorrect obstruction report
             homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.bool_value));
 
             if (rep.position==0xff) aware=0; else aware=1;
 
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
             LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
-            
         }
-        SEND(reqcal);
-        SEND(reqpos);
-        SEND(reqsta);
+        SEND(reqcal); SEND(reqpos); SEND(reqsta);
     }
 }
 
@@ -328,8 +321,7 @@ void parse(int positions) {
     int i=0;
     if (positions<4) LOG("%02x%02x\n",buff[0],buff[1]);
     else {
-        for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
-        LOG("\n");
+        for (i=3;i<positions-2;i++) LOG("%02x",buff[i]); LOG("\n");
         
         if (buff[3]==0x03 && buff[4]==0x01) xTaskNotifyGive( SendTask ); // open confirmation
         if (buff[3]==0x03 && buff[4]==0x02) xTaskNotifyGive( SendTask ); //close confirmation
@@ -366,7 +358,7 @@ void parse(int positions) {
             if (buff[4]==0x05) { //status answer
                 xTaskNotifyGive( SendTask );
                 status=buff[6];
-                if (!status && aware && target.value.int_value!=current.value.int_value) { //it is stopped (not blocked) and is aware
+                if (!status && aware && target.value.int_value!=current.value.int_value) { //stopped (not blocked) and aware
                     target.value.int_value=current.value.int_value;
                     homekit_characteristic_notify(&target,HOMEKIT_UINT8(target.value.int_value));
                 }
@@ -466,7 +458,6 @@ void motor_init() {
 
 }
 
-
 homekit_accessory_t *accessories[] = {
     HOMEKIT_ACCESSORY(
         .id=1,
@@ -503,8 +494,6 @@ homekit_accessory_t *accessories[] = {
         }),
     NULL
 };
-
-
 
 homekit_server_config_t config = {
     .accessories = accessories,
