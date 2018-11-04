@@ -117,7 +117,7 @@ homekit_characteristic_t revision     = HOMEKIT_CHARACTERISTIC_(FIRMWARE_REVISIO
 void target_set(homekit_value_t value);
 homekit_characteristic_t target       = HOMEKIT_CHARACTERISTIC_(TARGET_POSITION,  0, .setter=target_set);
 homekit_characteristic_t state        = HOMEKIT_CHARACTERISTIC_(POSITION_STATE,   2);
-homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0);
+homekit_characteristic_t current      = HOMEKIT_CHARACTERISTIC_(CURRENT_POSITION, 0, .min_value=(float[]) {-1});
 homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETECTED, 0);
 
 
@@ -347,7 +347,7 @@ void parse(int positions) {
             if (buff[4]==0x02) { //position answer
                 xTaskNotifyGive( SendTask );
                 if (buff[6]==0xff) {
-                    current.value.int_value=22; //no meaningful concept if not aware
+                    current.value.int_value=-1; //no meaningful concept if not aware
                     aware=0;
                     if (calibrated) SEND(close); //force a renewed awareness
                 } else {
