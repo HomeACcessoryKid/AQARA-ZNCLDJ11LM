@@ -85,18 +85,17 @@ char      _setpos[]={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC 
                             xQueueSend( senderQueue, (void *) &order, ( TickType_t ) 0 ); \
                             taskEXIT_CRITICAL(); \
                         } while(0)
-#define CONFIRM_TIMEOUT 10
+#define CONFIRM_TIMEOUT 20
 struct _order {
     int len;
     char chars[6];
 } order;
 QueueHandle_t senderQueue = NULL;
+bool obstr_confirm=0,aware=0;
 
-bool open_confirm=0,close_confirm=0,pause_confirm=0,uncal_confirm=0,obstr_confirm=0;
-bool reqcal_confirm=0,reqdir_confirm=0,reqpos_confirm=0,setdir_confirm=0;
 /* ============== BEGIN HOMEKIT CHARACTERISTIC DECLARATIONS ================================================================= */
 
-bool  hold=0,calibrate=0,reverse=0;
+bool  hold=0,calibrated=0,reverse=0;
 int  target=0;
 
 // add this section to make your device OTA capable
@@ -134,34 +133,33 @@ homekit_characteristic_t obstruction  = HOMEKIT_CHARACTERISTIC_(OBSTRUCTION_DETE
 
 homekit_value_t calibrate_get() ;
 void calibrate_set(homekit_value_t value) ;
-homekit_characteristic_t calibrated = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
+homekit_characteristic_t calibration = HOMEKIT_CHARACTERISTIC_(CUSTOM_CALIBRATED, 0, .setter=calibrate_set, .getter=calibrate_get);
 
 void calibrate_task(void *pvParameters){
     vTaskDelay(30); //allow for some screentime
-    calibrate=0; calibrated.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
-    homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
-//     uncal_confirm=0;    do { SEND(uncal,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-//                         } while (!uncal_confirm);
-//     close_confirm=0;    do { SEND(close,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-//                         } while (!close_confirm);
-//     //waiting for the curtain to hit the end
-//     obstr_confirm=0;    while (!obstr_confirm) vTaskDelay(CONFIRM_TIMEOUT);
-//     open_confirm=0;     do { SEND(open,4,i); vTaskDelay(CONFIRM_TIMEOUT);
-//                         } while (!open_confirm);
+    calibrated=0; calibration.value.bool_value=0; //set it back to zero to indicate that it is not yet finished
+    homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value)); //user feedback
+    SEND(uncal);
+    SEND(close);
+    obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
+    SEND(open);
+    obstr_confirm=0; do vTaskDelay(CONFIRM_TIMEOUT); while (!obstr_confirm);
+    SEND(reqpos);
+    SEND(reqcal);
     vTaskDelete(NULL);
 }
 
 homekit_value_t calibrate_get() {
-    return HOMEKIT_BOOL(calibrate);
+    return HOMEKIT_BOOL(calibrated);
 }
 void calibrate_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        LOG("Invalid calibrate-value format: %d\n", value.format);
+        LOG("Invalid calibrated-value format: %d\n", value.format);
         return;
     }
-    calibrate = value.bool_value;
-    LOG("Calibrate: %d\n", calibrate);
-    if ( calibrate) xTaskCreate(calibrate_task, "calibrate", 256, NULL, 1, NULL);
+    calibrated = value.bool_value;
+    LOG("Calibrate: %d\n", calibrated);
+    if ( calibrated) xTaskCreate(calibrate_task, "calibrated", 256, NULL, 1, NULL);
     else SEND(uncal);
 }
 
@@ -176,10 +174,10 @@ void reverse_set(homekit_value_t value) {
     }
     reverse = value.bool_value;
     LOG("Reverse: %d\n", reverse);
-    setdir_confirm=0;
-    if (reverse) do {SEND(setdir1); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
-    else         do {SEND(setdir0); vTaskDelay(CONFIRM_TIMEOUT);} while (!setdir_confirm);
+    if (reverse) SEND(setdir1); else SEND(setdir0);
     SEND(reqdir);
+    SEND(reqcal);
+    SEND(reqpos);
 }
 
 #define HOMEKIT_CHARACTERISTIC_CUSTOM_REVERSED HOMEKIT_CUSTOM_UUID("F0000005")
@@ -217,6 +215,21 @@ void target_set(homekit_value_t value) {
     }
     LOG("T:%3d\n",value.int_value);
     target = value.int_value;
+
+    uint crc = 0xFFFF;
+    int i,j;
+    char setpos[]={0x55,0xfe,0xfe,0x03,0x04,0x00};
+    setpos[5]=target;
+    for ( j = 0; j < 6; j++) {
+        crc ^= (uint)setpos[j];         // XOR byte into least sig. byte of crc
+        for ( i = 8; i != 0; i--) {     // Loop over each bit
+            if ((crc & 0x0001) != 0) {  // If the LSB is set
+                crc>>=1; crc^=0xA001;   // Shift right and XOR 0xA001
+            } else  crc >>= 1;          // Else LSB is not set so Just shift right
+    }   }   // Note, crc has low and high bytes swapped, so use it accordingly (or swap bytes)
+    LOG("%02x%02x%02x\n",_setpos[2],_setpos[3],_setpos[4]);
+    _setpos[2]=target;_setpos[3]=crc%256;_setpos[4]=crc/256;
+    SEND(setpos);
 }
 
 // void identify_task(void *_args) {
@@ -240,12 +253,12 @@ void sender_task(void *pvParameters){
     ulTaskNotifyTake( pdTRUE, 0 );
     while(1) {
         if( xQueueReceive( senderQueue, (void*)&ordr, (TickType_t) portMAX_DELAY ) ) {
-            attempt=2;
+            attempt=3;
             do {uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe);
                 for (i=0;i<ordr.len;i++) uart_putc(1,ordr.chars[i]);
                 uart_flush_txfifo(1);
                 for (i=0;i<ordr.len;i++) LOG("%02x",ordr.chars[i]); LOG(" sent\n");
-                if (ulTaskNotifyTake( pdTRUE, CONFIRM_TIMEOUT )==pdTRUE) {LOG("continue\n"); break; } //semafore to signal a response received
+                if (ulTaskNotifyTake( pdTRUE, CONFIRM_TIMEOUT )==pdTRUE) break; //semafore to signal a response received
             } while (--attempt);
         }        
     }
@@ -265,7 +278,7 @@ struct _report {
 
 QueueHandle_t reportQueue = NULL;
 void report_task(void *pvParameters){
-    int timer=1500;
+    int timer=6000;
     bool obstructed;
     struct _report rep;
     
@@ -274,26 +287,24 @@ void report_task(void *pvParameters){
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
             obstructed=false; timer=100;
             if (rep.status==4) {obstructed=true; rep.status=0;}
-            state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1
+            state.value.int_value=(rep.status+2)%3; //0->2 1->0 2->1 3->2
             homekit_characteristic_notify(&state,HOMEKIT_UINT8(state.value.int_value));
             if (state.value.int_value==2) timer=6000;
             
-            if (calibrate){ //calibrated
-                if (obstructed) {
-                    obstruction.value.bool_value=1;
-                    homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.bool_value));
-                }
-            } else { //uncalibrated
-                if (obstructed) obstr_confirm=1;
-                if (rep.calibr) {
-                    calibrate=1;calibrated.value.bool_value=1;
-                    homekit_characteristic_notify(&calibrated,HOMEKIT_BOOL(calibrated.value.bool_value));
-                }
-            }
+            calibrated=rep.calibr;calibration.value.bool_value=1;
+            homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value));
+
+            obstr_confirm=obstructed;
+            obstruction.value.bool_value=obstructed;
+            if (!aware || !calibrated) obstruction.value.bool_value=0; //use old value of 'aware' to prevent incorrect obstruction report
+            homekit_characteristic_notify(&obstruction,HOMEKIT_BOOL(obstruction.value.bool_value));
+
+            if (rep.position==0xff) aware=0; else aware=1;
+
             LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
-            LOG("state=%d\n",state.value.int_value);
+            LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
         }
-        //SEND(reqpos,5,i);
+        SEND(reqpos);
     }
 }
 
@@ -308,10 +319,11 @@ void parse(int positions) {
         for (i=3;i<positions-2;i++) LOG("%02x",buff[i]);
         LOG("\n");
         
-        if (buff[3]==0x03 && buff[4]==0x01)  open_confirm=1; // open confirmation
-        if (buff[3]==0x03 && buff[4]==0x02) close_confirm=1; //close confirmation
-        if (buff[3]==0x03 && buff[4]==0x03) pause_confirm=1; //pause confirmation
-        if (buff[3]==0x03 && buff[4]==0x07) uncal_confirm=1; //uncal confirmation
+        if (buff[3]==0x03 && buff[4]==0x01) xTaskNotifyGive( SendTask ); // open confirmation
+        if (buff[3]==0x03 && buff[4]==0x02) xTaskNotifyGive( SendTask ); //close confirmation
+        if (buff[3]==0x03 && buff[4]==0x03) xTaskNotifyGive( SendTask ); //pause confirmation
+        if (buff[3]==0x03 && buff[4]==0x04) xTaskNotifyGive( SendTask ); //setpos confirmation
+        if (buff[3]==0x03 && buff[4]==0x07) xTaskNotifyGive( SendTask ); //uncal confirmation
         if (buff[3]==0x04 && buff[4]==0x02 && buff[5]==0x08) { //report
             report.position=buff[6];
             report.direction=buff[7];
@@ -322,24 +334,31 @@ void parse(int positions) {
         if (buff[3]==0x01 && buff[5]==0x01) { //answers to requests
             if (buff[4]==0x02) { //position answer
                 xTaskNotifyGive( SendTask );
-                if (buff[6]==0xff) current.value.int_value=50; //no meaningful concept if not calibrated
-                else current.value.int_value=buff[6];
+                if (buff[6]==0xff) {
+                    current.value.int_value=22; //no meaningful concept if not aware
+                    aware=0;
+                } else {
+                    current.value.int_value=buff[6];
+                    aware=1;
+                }
                 homekit_characteristic_notify(&current,HOMEKIT_UINT8(current.value.int_value));
-                reqpos_confirm=1;
+                //consider to send close if calibration
             }
             if (buff[4]==0x03) { //direction answer
-                reverse=buff[6]; reqdir_confirm=1;
+                xTaskNotifyGive( SendTask );
+                reverse=buff[6];
                 reversed.value.bool_value=reverse;
                 homekit_characteristic_notify(&reversed,HOMEKIT_BOOL(reversed.value.bool_value));    
-                xTaskNotifyGive( SendTask );
             }
             if (buff[4]==0x09) { //calibr answer
-                calibrate=buff[6]; reqcal_confirm=1;
                 xTaskNotifyGive( SendTask );
+                calibrated=buff[6];
+                calibration.value.bool_value=calibrated;
+                homekit_characteristic_notify(&calibration,HOMEKIT_BOOL(calibration.value.bool_value));    
             }
         }
         if (buff[3]==0x02 && buff[4]==0x03 && buff[5]==0x01) {
-            setdir_confirm=1;
+            xTaskNotifyGive( SendTask ); // setdir confirmation
         }
     }
 }
@@ -459,7 +478,7 @@ homekit_accessory_t *accessories[] = {
                     ),
                     &obstruction,
                     &ota_trigger,
-                    &calibrated,
+                    &calibration,
                     &reversed,
                     NULL
                 }),
