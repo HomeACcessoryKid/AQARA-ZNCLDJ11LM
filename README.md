@@ -31,7 +31,7 @@ If the mains power is lost on a calibrated motor, the program will close the cur
 While the system is not calibrated, the position is reported as 101%
 
 If there is a blockage somewhere between 1 and 99%, the motor will report so and the homekit app will know how to report it. Moving to another position clear this message/state.
-![](https://github.com/HomeACcessoryKid/HardWare/blob/master/Aqara-ZNCLDJ11LM/Aqara-6.png)
+![](https://github.com/HomeACcessoryKid/AQARA-ZNCLDJ11LM/blob/master/images/Aqara-1.png)
 
 For instructions on how to do the firmware update procedure, start at the [LCM repo](https://github.com/HomeACcessoryKid/life-cycle-manager/)  
 Enjoy!  
