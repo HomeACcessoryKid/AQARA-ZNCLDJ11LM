@@ -343,6 +343,8 @@ void parse(int positions) {
                     aware=0;
                     if (calibrated) SEND(close); //force a renewed awareness
                 } else {
+                    if (buff[6]< 3) buff[6]=  0; //the motor retracts a bit when arriving at the goal
+                    if (buff[6]>97) buff[6]=100; //so it (almost) never arrives at exactly 0% or 100%
                     current.value.int_value=buff[6];
                     aware=1;
                 }
