@@ -16,36 +16,11 @@
 #include <homekit/characteristics.h>
 #include <string.h>
 #include "lwip/api.h"
+#include <udplogger.h>
 
-//use nc -kulnw0 34567 to collect this output
-#define LOG(message, ...)  sprintf(string+strlen(string),message, ##__VA_ARGS__)
-char string[1450]={0}; //in the end I do not know to prevent overflow, so I use the max size of 1 UDP packet
-void log_send(void *pvParameters){
-    struct netconn* conn;
-    int i=0,len;
-    
-    while (sdk_wifi_station_get_connect_status() != STATION_GOT_IP) vTaskDelay(20); //Check if we have an IP every 200ms 
-    // Create UDP connection
-    conn = netconn_new(NETCONN_UDP);
-    if (netconn_bind(   conn, IP_ADDR_ANY,       33333) != ERR_OK) netconn_delete(conn);
-    if (netconn_connect(conn, IP_ADDR_BROADCAST, 34567) != ERR_OK) netconn_delete(conn);
-    
-    while(1){
-        len=strlen(string);
-        if ((!i && len) || len>1000) {
-            struct netbuf* buf = netbuf_new();
-            void* data = netbuf_alloc(buf,len);
-            memcpy (data,string,len);
-            string[0]=0; //there is a risk of new LOG to add to string after we measured len
-            if (netconn_send(conn, buf) == ERR_OK) netbuf_delete(buf);
-            i=10;
-        }
-        if (!i) i=10; //sends output every 100ms if not more than 1000 bytes
-        i--;
-        vTaskDelay(1); //with len>1000 and delay=10ms, we might handle 800kbps throughput
-    }
-}
-//==================== END OF UDP LOG COLLECTOR ===================
+#ifndef VERSION
+ #error You must set VERSION=x.y.z to match github version tag x.y.z
+#endif
 
 //hardcoded CRC16_MODBUS
 char        _open[]={0x03,0x01,0xb9,0x24}; //n=4
@@ -74,7 +49,7 @@ char     _setdir1[]={0x02,0x03,0x01,0x01,0x13,0xe7}; //n=6
 #define  _setdir1_n 6
 char      _setpos[]={0x03,0x04,0x00,0x00,0x00}; //n=5 still needs value and CRC filled in
 #define   _setpos_n 5
-#define SEND(message) do {LOG(#message "\n"); \
+#define SEND(message) do {UDPLUO(#message "\n"); \
                             taskENTER_CRITICAL(); \
                             memcpy(order.chars, _ ## message, _ ## message ## _n); \
                             order.len=_ ## message ## _n; \
@@ -159,11 +134,11 @@ homekit_value_t calibrate_get() {
 }
 void calibrate_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        LOG("Invalid calibrated-value format: %d\n", value.format);
+        UDPLUO("Invalid calibrated-value format: %d\n", value.format);
         return;
     }
     calibrated = value.bool_value;
-    LOG("Calibrate: %d\n", calibrated);
+    UDPLUO("Calibrate: %d\n", calibrated);
     if ( calibrated) xTaskCreate(calibrate_task, "calibrated", 256, NULL, 1, NULL);
     else {SEND(uncal); SEND(reqpos);}
 }
@@ -171,11 +146,11 @@ void calibrate_set(homekit_value_t value) {
 
 void reverse_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        LOG("Invalid reversed-value format: %d\n", value.format);
+        UDPLUO("Invalid reversed-value format: %d\n", value.format);
         return;
     }
     reversed = value.bool_value;
-    LOG("Reverse: %d\n", reversed);
+    UDPLUO("Reverse: %d\n", reversed);
     if (reversed) SEND(setdir1); else SEND(setdir0);
     SEND(reqdir);
     SEND(reqcal);
@@ -201,20 +176,20 @@ homekit_value_t hold_get() {
 }
 void hold_set(homekit_value_t value) {
     if (value.format != homekit_format_bool) {
-        LOG("Invalid hold-value format: %d\n", value.format);
+        UDPLUO("Invalid hold-value format: %d\n", value.format);
         return;
     }
-    LOG("H:%3d\n",value.bool_value);
+    UDPLUO("H:%3d\n",value.bool_value);
     hold = value.bool_value;
 }
 
 
 void target_set(homekit_value_t value) {
     if (value.format != homekit_format_uint8) {
-        LOG("Invalid target-value format: %d\n", value.format);
+        UDPLUO("Invalid target-value format: %d\n", value.format);
         return;
     }
-    LOG("T:%3d\n",value.int_value);
+    UDPLUO("T:%3d\n",value.int_value);
 
     uint crc = 0xFFFF;
     int i,j;
@@ -244,7 +219,7 @@ void target_set(homekit_value_t value) {
 // }
 
 void identify(homekit_value_t _value) {
-    LOG("Identify\n");
+    UDPLUO("Identify\n");
 //    xTaskCreate(identify_task, "identify", 256, NULL, 2, NULL);
 }
 
@@ -255,7 +230,7 @@ void sender_task(void *pvParameters){
     int i,attempt;
     struct _order ordr;
 
-    if( senderQueue == 0 ) {LOG("NO SEND QUEUE!\n");vTaskDelete(NULL);}
+    if( senderQueue == 0 ) {UDPLUO("NO SEND QUEUE!\n");vTaskDelete(NULL);}
     ulTaskNotifyTake( pdTRUE, 0 );
     while(1) {
         if( xQueueReceive( senderQueue, (void*)&ordr, (TickType_t) portMAX_DELAY ) ) {
@@ -263,7 +238,7 @@ void sender_task(void *pvParameters){
             do {uart_putc(1,0x55);uart_putc(1,0xfe);uart_putc(1,0xfe);
                 for (i=0;i<ordr.len;i++) uart_putc(1,ordr.chars[i]);
                 uart_flush_txfifo(1);
-                for (i=0;i<ordr.len;i++) LOG("%02x",ordr.chars[i]); LOG(" sent\n");
+                for (i=0;i<ordr.len;i++) UDPLUO("%02x",ordr.chars[i]); UDPLUO(" sent\n");
                 if (ulTaskNotifyTake( pdTRUE, CONFIRM_TIMEOUT )==pdTRUE) break; //semafore to signal a response received
             } while (--attempt);
         }        
@@ -287,7 +262,7 @@ void report_task(void *pvParameters){
     bool obstructed;
     struct _report rep;
     
-    if( reportQueue == 0 ) {LOG("NO REPORT QUEUE!\n");vTaskDelete(NULL);}
+    if( reportQueue == 0 ) {UDPLUO("NO REPORT QUEUE!\n");vTaskDelete(NULL);}
     while(1) {
         if( xQueueReceive( reportQueue, (void*)&rep, (TickType_t) timer ) ) {
             obstructed=false; timer=100;
@@ -306,8 +281,8 @@ void report_task(void *pvParameters){
 
             if (rep.position==0xff) aware=0; else aware=1;
 
-            LOG("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
-            LOG("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
+            UDPLUO("pos=%02x,dir=%02x,sta=%02x,cal=%02x,",rep.position,rep.direction,rep.status,rep.calibr);
+            UDPLUO("state=%d, obstructed=%d\n",state.value.int_value,obstruction.value.bool_value);
         }
         SEND(reqcal); SEND(reqpos); SEND(reqsta);
     }
@@ -319,9 +294,9 @@ int idx=0;
 
 void parse(int positions) {
     int i=0;
-    if (positions<4) LOG("%02x%02x\n",buff[0],buff[1]);
+    if (positions<4) UDPLUO("%02x%02x\n",buff[0],buff[1]);
     else {
-        for (i=3;i<positions-2;i++) LOG("%02x",buff[i]); LOG("\n");
+        for (i=3;i<positions-2;i++) UDPLUO("%02x",buff[i]); UDPLUO("\n");
         
         if (buff[3]==0x03 && buff[4]==0x01) xTaskNotifyGive( SendTask ); // open confirmation
         if (buff[3]==0x03 && buff[4]==0x02) xTaskNotifyGive( SendTask ); //close confirmation
@@ -406,11 +381,11 @@ void uart_parse_input(void *pvParameters) {
     //int i;
     for(;;) {
         buff[idx++]=uart_getc(0);
-        //for (i=1;i<idx;i++) LOG("   ");
-        //LOG("v%d\n",idx);
+        //for (i=1;i<idx;i++) UDPLUO("   ");
+        //UDPLUO("v%d\n",idx);
         while (idx){
-            //for (i=0;i<16;i++) LOG("%02x.",buff[i]);
-            //LOG("   %d\n",idx);
+            //for (i=0;i<16;i++) UDPLUO("%02x.",buff[i]);
+            //UDPLUO("   %d\n",idx);
             if (!(buff[0]==0x88 || buff[0]==0x55))  {          shift_buff(1); continue;}
             if   (buff[0]==0x88 && buff[1]==0xf8)   {parse(2); shift_buff(2); continue;}
             if   (buff[0]==0x88 && idx>=2)          {          shift_buff(1); continue;}
@@ -436,7 +411,7 @@ void uart_parse_input(void *pvParameters) {
                 if (!crc16(16)) parse(16);
                 shift_buff(16); continue;
             } //BUG FIX these shifts for failures should be 1 only
-            if (idx==16) LOG("something went wrong: idx=16!\n");
+            if (idx==16) UDPLUO("something went wrong: idx=16!\n");
             break;
         }
     }
@@ -503,8 +478,8 @@ homekit_server_config_t config = {
 };
 
 void user_init(void) {
-    xTaskCreate(log_send, "logsend", 256, NULL, 4, NULL); //is prio4 a good idea??
-    LOG("Aqara Curtain Motor\n");
+    udplog_init(2);
+    UDPLUS("\n\n\nAqara Curtain Motor " VERSION "\n");
 
     motor_init();
 

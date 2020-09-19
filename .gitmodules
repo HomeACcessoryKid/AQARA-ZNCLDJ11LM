@@ -7,3 +7,6 @@
 [submodule "esp-wolfssl"]
 	path = esp-wolfssl
 	url = https://github.com/HomeACcessoryKid/esp-wolfssl
+[submodule "UDPlogger"]
+	path = UDPlogger
+	url = https://github.com/HomeACcessoryKid/UDPlogger

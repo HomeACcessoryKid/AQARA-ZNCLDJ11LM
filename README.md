@@ -1,5 +1,5 @@
 # AQARA-ZNCLDJ11LM
-Aqara curtain motor homekit software. (c) 2018 HomeAccessoryKid
+Aqara curtain motor homekit software. (c) 2018-2020 HomeAccessoryKid
 
 This homekit software drives a curtain motor Aqara ZNCLDJ11LM as offered on
 e.g. alibaba. It uses any ESP8266 with as little as 1MB flash. 
